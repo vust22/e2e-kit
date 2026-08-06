@@ -102,10 +102,16 @@ Also: PrestaShop module class names keep underscores and capitalise each segment
 
 ## What each remaining phase needs
 
-### Phase 3 — Mollie pilot (spec §6)
+### Phase 3 — Mollie pilot (spec §6)  ← NEXT, decided 2026-08-06
 
-**Blocked on input:** the Mollie PrestaShop module repo path or URL. The repo owner said
-they would provide it.
+The repo owner chose to take Phase 3 before Phase 2.
+
+**Blocked on input:** the Mollie PrestaShop module repo path or URL. Ask for it first —
+nothing in Phase 3 can be verified without the real module, and the spec forbids modifying
+it (see the constraint below), so guessing at its controller names or config keys is not a
+workable substitute. Spec §6.1 carries an explicit agent note: verify controller names,
+config field selectors and `/v2/payments` vs `/v2/orders` usage against the actual module
+source, and record the findings in the consumer repo's `e2e/NOTES.md`.
 
 Also worth raising before starting: spec §0 says implement in phase order, and Phase 3's DoD
 includes *"Mollie repo PRs blocked/green on mock matrix"*, which needs Phase 2's reusable
