@@ -1,0 +1,30 @@
+# Sandbox-mode overlay (spec §6.5).
+#
+# Real provider test environments need two things the base stack cannot give them: the
+# provider must be able to reach our webhook endpoint, and the browser must come back to a
+# publicly resolvable URL. A Cloudflare quick tunnel supplies both without any account
+# binding or standing DNS.
+#
+# Deliberately defines no network aliases, so provider hostnames resolve to the real
+# internet — that difference is the entire mode switch.
+#
+# Phase 3 wires the workflow side (parsing the assigned hostname out of the cloudflared
+# log into E2E_PUBLIC_URL); the container definition lives here so the topology is
+# reviewable now.
+
+services:
+  shop:
+    environment:
+      E2E_PSP_MODE: sandbox
+      # Set by the caller once the tunnel hostname is known; the shop entrypoint rewrites
+      # shop_url to it on boot (spec §4.1 item 8).
+      E2E_SHOP_DOMAIN: ${E2E_PUBLIC_HOST:-localhost:8080}
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    platform: ${E2E_PLATFORM:-linux/amd64}
+    depends_on:
+      shop:
+        condition: service_healthy
+    command: ['tunnel', '--no-autoupdate', '--url', 'http://shop:80']
+    restart: unless-stopped

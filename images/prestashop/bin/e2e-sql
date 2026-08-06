@@ -1,0 +1,12 @@
+#!/bin/bash
+# Run SQL against the shop database without the caller needing credentials.
+# Batch mode (-B) + no column names (-N) so output is easy to parse from ShopCli.
+set -euo pipefail
+exec mysql \
+  -h "${DB_SERVER}" \
+  -P "${DB_PORT}" \
+  -u "${DB_USER}" \
+  "-p${DB_PASSWD}" \
+  -N -B \
+  --default-character-set=utf8mb4 \
+  "${DB_NAME}" "$@"

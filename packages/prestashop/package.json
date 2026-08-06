@@ -1,0 +1,44 @@
+{
+  "name": "@invertus/e2e-prestashop",
+  "version": "0.1.0",
+  "description": "PrestaShop platform adapter for the Invertus E2E kit: page objects, shared flows, seed dataset",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": { "node": ">=22.0.0" },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./adapter": {
+      "types": "./dist/adapter.d.ts",
+      "import": "./dist/adapter.js"
+    },
+    "./flows": {
+      "types": "./dist/flows/index.d.ts",
+      "import": "./dist/flows/index.js"
+    },
+    "./seed": {
+      "types": "./dist/seed/index.d.ts",
+      "import": "./dist/seed/index.js"
+    },
+    "./suites": {
+      "types": "./dist/suites/index.d.ts",
+      "import": "./dist/suites/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc --build",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@invertus/e2e-core": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  }
+}

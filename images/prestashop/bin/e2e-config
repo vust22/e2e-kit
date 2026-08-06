@@ -1,0 +1,133 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Read and write PrestaShop `Configuration` values from the outside.
+ *
+ * Used by `ShopCli.setModuleConfig` / `getConfig`, which is how PSP implementations are
+ * expected to configure a module: fast and UI-independent (spec §6.2).
+ *
+ *   e2e-config get  NAME
+ *   e2e-config set  NAME VALUE
+ *   e2e-config set-many MODULE '{"KEY":"VALUE",...}'
+ */
+
+declare(strict_types=1);
+
+const PS_ROOT = '/var/www/html';
+
+$_SERVER['HTTP_HOST'] = 'localhost';
+$_SERVER['SERVER_NAME'] = 'localhost';
+$_SERVER['SERVER_PORT'] = '80';
+$_SERVER['REQUEST_URI'] = '/';
+$_SERVER['REMOTE_ADDR'] = '127.0.0.1';
+$_SERVER['SCRIPT_NAME'] = '/index.php';
+
+require_once PS_ROOT . '/config/config.inc.php';
+
+$command = $argv[1] ?? '';
+
+switch ($command) {
+    case 'get':
+        $name = $argv[2] ?? '';
+        if ($name === '') {
+            fwrite(STDERR, "usage: e2e-config get NAME\n");
+            exit(2);
+        }
+        $value = Configuration::get($name);
+        if ($value === false) {
+            exit(1);
+        }
+        fwrite(STDOUT, (string) $value);
+        exit(0);
+
+    case 'set':
+        $name = $argv[2] ?? '';
+        $value = $argv[3] ?? '';
+        if ($name === '') {
+            fwrite(STDERR, "usage: e2e-config set NAME VALUE\n");
+            exit(2);
+        }
+        if (!Configuration::updateValue($name, $value)) {
+            fwrite(STDERR, "failed to update {$name}\n");
+            exit(1);
+        }
+        exit(0);
+
+    case 'set-many':
+        $module = $argv[2] ?? '';
+        $json = $argv[3] ?? '';
+        if ($module === '' || $json === '') {
+            fwrite(STDERR, "usage: e2e-config set-many MODULE '{\"KEY\":\"VALUE\"}'\n");
+            exit(2);
+        }
+        try {
+            $values = json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $e) {
+            fwrite(STDERR, 'invalid JSON: ' . $e->getMessage() . "\n");
+            exit(2);
+        }
+        if (!is_array($values)) {
+            fwrite(STDERR, "expected a JSON object of key/value pairs\n");
+            exit(2);
+        }
+        foreach ($values as $key => $value) {
+            if (!Configuration::updateValue((string) $key, (string) $value)) {
+                fwrite(STDERR, "failed to update {$key} for module {$module}\n");
+                exit(1);
+            }
+        }
+        exit(0);
+
+    case 'module-active':
+        // Enable/disable a module without going through the back office.
+        $module = $argv[2] ?? '';
+        $active = ($argv[3] ?? '1') === '1' ? 1 : 0;
+        if ($module === '') {
+            fwrite(STDERR, "usage: e2e-config module-active MODULE 0|1\n");
+            exit(2);
+        }
+        $escaped = pSQL($module);
+        Db::getInstance()->execute(
+            'UPDATE `' . _DB_PREFIX_ . "module` SET active = {$active} WHERE name = '{$escaped}'"
+        );
+        exit(0);
+
+    case 'carriers-allow':
+        /**
+         * Associate a module with every carrier.
+         *
+         * PrestaShop filters payment modules at checkout by the cart's carrier
+         * (`ps_module_carrier`, see Hook::exec's paymentOptions special case). A payment
+         * module installed *after* a carrier exists is not associated with it, and the
+         * only symptom is "there is no payment method available" — no error, no log line.
+         * Every module install run by the kit calls this.
+         */
+        $module = $argv[2] ?? '';
+        if ($module === '') {
+            fwrite(STDERR, "usage: e2e-config carriers-allow MODULE\n");
+            exit(2);
+        }
+        $moduleId = (int) Db::getInstance()->getValue(
+            'SELECT id_module FROM `' . _DB_PREFIX_ . "module` WHERE name = '" . pSQL($module) . "'"
+        );
+        if (!$moduleId) {
+            fwrite(STDERR, "module {$module} is not installed\n");
+            exit(1);
+        }
+        $shopId = (int) Configuration::get('PS_SHOP_DEFAULT');
+        $carriers = Db::getInstance()->executeS(
+            'SELECT DISTINCT `id_reference` FROM `' . _DB_PREFIX_ . 'carrier` WHERE `deleted` = 0'
+        ) ?: [];
+        foreach ($carriers as $carrier) {
+            Db::getInstance()->execute(
+                'INSERT IGNORE INTO `' . _DB_PREFIX_ . 'module_carrier` (`id_module`, `id_shop`, `id_reference`) '
+                . 'VALUES (' . $moduleId . ', ' . $shopId . ', ' . (int) $carrier['id_reference'] . ')'
+            );
+        }
+        fwrite(STDOUT, sprintf("associated %s with %d carrier(s)\n", $module, count($carriers)));
+        exit(0);
+
+    default:
+        fwrite(STDERR, "usage: e2e-config get|set|set-many|module-active|carriers-allow ...\n");
+        exit(2);
+}

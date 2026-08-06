@@ -1,0 +1,55 @@
+# Base stack: the seeded shop plus its database (spec §3.1).
+#
+# This is the file CI uses too — `e2e-kit up` and the reusable workflow both call plain
+# `docker compose` with it, which is what guarantees local/CI parity (Goal 7).
+
+services:
+  db:
+    image: mariadb:11.4
+    platform: ${E2E_PLATFORM:-linux/amd64}
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: ${DB_NAME:-prestashop}
+      MARIADB_USER: ${DB_USER:-prestashop}
+      MARIADB_PASSWORD: ${DB_PASSWORD:-prestashop}
+    # The database is thrown away with the stack, so there is no reason to pay for disk.
+    # This is also the single biggest boot-time win against the §8.2 90s budget.
+    tmpfs:
+      - /var/lib/mysql:size=1g
+    command:
+      - --skip-innodb-doublewrite
+      - --innodb-flush-log-at-trx-commit=0
+      - --innodb-flush-method=nosync
+      - --sync-binlog=0
+      - --max-allowed-packet=64M
+    healthcheck:
+      test: ['CMD', 'healthcheck.sh', '--connect', '--innodb_initialized']
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  shop:
+    image: ${E2E_PS_IMAGE:-e2e-ps:8}
+    platform: ${E2E_PLATFORM:-linux/amd64}
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_SERVER: db
+      DB_PORT: '3306'
+      DB_NAME: ${DB_NAME:-prestashop}
+      DB_USER: ${DB_USER:-prestashop}
+      DB_PASSWD: ${DB_PASSWORD:-prestashop}
+      DB_PREFIX: ps_
+      E2E_SHOP_DOMAIN: ${E2E_SHOP_DOMAIN:-localhost:8080}
+      E2E_RESET_DB: ${E2E_RESET_DB:-0}
+      E2E_PSP_MODE: ${E2E_PSP_MODE:-mock}
+    ports:
+      - '${E2E_SHOP_PORT:-8080}:80'
+    healthcheck:
+      test: ['CMD', 'curl', '-fsS', '-o', '/dev/null', 'http://127.0.0.1/index.php']
+      interval: 3s
+      timeout: 10s
+      retries: 40
+      start_period: 15s

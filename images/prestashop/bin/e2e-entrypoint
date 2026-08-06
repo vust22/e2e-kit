@@ -1,0 +1,75 @@
+#!/bin/bash
+# Runtime entrypoint (spec §4.1 items 6 and 8).
+#
+# The shop is already installed inside this image; all this does is attach it to whatever
+# database the compose stack provides, point it at the right hostname, and start Apache.
+# It never runs the PrestaShop installer.
+set -euo pipefail
+
+PS_ROOT=/var/www/html
+SEED_SQL="${E2E_SEED_SQL:-/e2e/seed/prestashop.sql}"
+
+log() { printf '\033[1;36m[e2e]\033[0m %s\n' "$*"; }
+
+mysql_cmd() {
+  mysql -h "${DB_SERVER}" -P "${DB_PORT}" -u "${DB_USER}" "-p${DB_PASSWD}" "$@"
+}
+
+# The image was installed against a build-time loopback database; repoint it at the one
+# this stack provides before anything tries to connect.
+e2e-db-params
+
+log "Waiting for database ${DB_SERVER}:${DB_PORT}"
+for i in $(seq 1 120); do
+  if mysql_cmd -e 'SELECT 1' >/dev/null 2>&1; then break; fi
+  if [ "$i" = 120 ]; then
+    echo "ENV_BOOT_FAILED: database ${DB_SERVER}:${DB_PORT} never became reachable" >&2
+    exit 1
+  fi
+  sleep 1
+done
+log "Database is reachable"
+
+needs_import=0
+if [ "${E2E_RESET_DB:-0}" = "1" ]; then
+  log "E2E_RESET_DB=1 -> forcing a reimport of the seeded database"
+  needs_import=1
+elif ! mysql_cmd -D "${DB_NAME}" -e "SELECT 1 FROM \`${DB_PREFIX}configuration\` LIMIT 1" >/dev/null 2>&1; then
+  log "Database is empty -> importing the seeded database"
+  needs_import=1
+fi
+
+if [ "${needs_import}" = "1" ]; then
+  if [ ! -f "${SEED_SQL}" ]; then
+    echo "ENV_BOOT_FAILED: seed dump ${SEED_SQL} is missing from the image" >&2
+    exit 1
+  fi
+  mysql_cmd -e "DROP DATABASE IF EXISTS \`${DB_NAME}\`; CREATE DATABASE \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+  mysql_cmd -D "${DB_NAME}" < "${SEED_SQL}"
+  log "Seeded database imported ($(wc -c < "${SEED_SQL}") bytes)"
+fi
+
+# Spec §4.1 item 8: the same image must work behind a tunnel hostname, so the shop domain
+# is rewritten on every boot rather than baked.
+DOMAIN="${E2E_SHOP_DOMAIN:-localhost:8080}"
+DOMAIN="${DOMAIN#http://}"
+DOMAIN="${DOMAIN#https://}"
+DOMAIN="${DOMAIN%/}"
+log "Setting shop domain to ${DOMAIN}"
+mysql_cmd -D "${DB_NAME}" -e "
+  UPDATE \`${DB_PREFIX}shop_url\` SET domain='${DOMAIN}', domain_ssl='${DOMAIN}';
+  UPDATE \`${DB_PREFIX}configuration\` SET value='${DOMAIN}' WHERE name IN ('PS_SHOP_DOMAIN','PS_SHOP_DOMAIN_SSL');
+"
+
+# Apache needs a ServerName so it does not complain, and PrestaShop reads it for links.
+echo "ServerName ${DOMAIN%%:*}" > /etc/apache2/conf-available/e2e-servername.conf
+a2enconf e2e-servername >/dev/null
+
+log "Clearing cache"
+rm -rf "${PS_ROOT}/var/cache/prod" "${PS_ROOT}/var/cache/dev" >/dev/null 2>&1 || true
+rm -rf "${PS_ROOT}"/cache/smarty/compile/* "${PS_ROOT}"/cache/smarty/cache/* >/dev/null 2>&1 || true
+mkdir -p "${PS_ROOT}/var/cache" "${PS_ROOT}/var/logs"
+chown -R www-data:www-data "${PS_ROOT}/var" "${PS_ROOT}/cache" 2>/dev/null || true
+
+log "Starting: $*"
+exec "$@"

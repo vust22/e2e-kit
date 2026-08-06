@@ -1,0 +1,23 @@
+# The image build only needs images/**, so keep the build context small — without this
+# the whole workspace (including node_modules and Playwright artifacts) is uploaded to the
+# daemon on every build.
+node_modules
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+test-results
+playwright-report
+blob-report
+healing-bundles
+**/.e2e-kit
+examples
+packages
+compose
+scripts
+docs
+
+# Explicitly kept: the generated E2E CA certificate, which the PrestaShop image installs
+# into its trust store. It is git-ignored but must reach the build context.
+!images/prestashop/e2e-ca/e2e-ca.crt

@@ -1,0 +1,15 @@
+# Mock-mode overlay (spec §6.4).
+#
+# Provider API mocks join the network under the provider's own hostname, so the module
+# under test reaches them without a single line of module configuration. Mode switching is
+# purely a compose concern: the sandbox overlay simply defines no aliases, and
+# `api.mollie.com` resolves normally again.
+#
+# The mock services themselves land in Phase 3; this file currently carries only the
+# mode wiring that Phase 1 needs, so that `--mode mock` is a real code path from day one
+# rather than something switched on later.
+
+services:
+  shop:
+    environment:
+      E2E_PSP_MODE: mock

@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+
+# Kit runtime state
+.e2e-kit/
+healing-bundles/
+
+# E2E CA key material (DECISIONS.md D-009): generated per image build, never committed.
+# The whole directory is excluded rather than a list of extensions — an earlier version of
+# this file globbed only the top level and let `leaf/<host>/server.key` through.
+images/prestashop/e2e-ca/
+
+# Generated from packages/prestashop/src/seed/dataset.ts by scripts/build-image.mjs.
+images/prestashop/seed/manifest.json
+
+.DS_Store
+.env
+.env.local

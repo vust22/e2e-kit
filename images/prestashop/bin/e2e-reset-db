@@ -1,0 +1,32 @@
+#!/bin/bash
+# Fast database reset to the baked seed state (spec §4.1 item 6, §5.5 `reset-db`).
+# Much faster than recreating the container: no image pull, no Apache restart.
+set -euo pipefail
+
+PS_ROOT=/var/www/html
+SEED_SQL="${E2E_SEED_SQL:-/e2e/seed/prestashop.sql}"
+
+if [ ! -f "${SEED_SQL}" ]; then
+  echo "seed dump ${SEED_SQL} is missing from the image" >&2
+  exit 1
+fi
+
+mysql -h "${DB_SERVER}" -P "${DB_PORT}" -u "${DB_USER}" "-p${DB_PASSWD}" \
+  -e "DROP DATABASE IF EXISTS \`${DB_NAME}\`; CREATE DATABASE \`${DB_NAME}\` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;"
+
+mysql -h "${DB_SERVER}" -P "${DB_PORT}" -u "${DB_USER}" "-p${DB_PASSWD}" \
+  -D "${DB_NAME}" < "${SEED_SQL}"
+
+DOMAIN="${E2E_SHOP_DOMAIN:-localhost:8080}"
+DOMAIN="${DOMAIN#http://}"; DOMAIN="${DOMAIN#https://}"; DOMAIN="${DOMAIN%/}"
+mysql -h "${DB_SERVER}" -P "${DB_PORT}" -u "${DB_USER}" "-p${DB_PASSWD}" -D "${DB_NAME}" -e "
+  UPDATE \`${DB_PREFIX}shop_url\` SET domain='${DOMAIN}', domain_ssl='${DOMAIN}';
+  UPDATE \`${DB_PREFIX}configuration\` SET value='${DOMAIN}' WHERE name IN ('PS_SHOP_DOMAIN','PS_SHOP_DOMAIN_SSL');
+"
+
+rm -rf "${PS_ROOT}/var/cache/prod" "${PS_ROOT}/var/cache/dev" >/dev/null 2>&1 || true
+rm -rf "${PS_ROOT}"/cache/smarty/compile/* "${PS_ROOT}"/cache/smarty/cache/* >/dev/null 2>&1 || true
+mkdir -p "${PS_ROOT}/var/cache"
+chown -R www-data:www-data "${PS_ROOT}/var" "${PS_ROOT}/cache" 2>/dev/null || true
+
+echo "database reset to seed state"

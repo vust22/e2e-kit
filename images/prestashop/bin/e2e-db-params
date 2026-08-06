@@ -1,0 +1,83 @@
+#!/usr/bin/env php
+<?php
+/**
+ * Point the installed shop at the database the compose stack actually provides.
+ *
+ * The image is built against a throwaway loopback MariaDB, so the credentials the
+ * installer baked into `parameters.php` are wrong at runtime. Rewriting them on every
+ * boot (rather than baking a hostname) is what lets one image run under any compose
+ * topology — local, CI, or behind a tunnel.
+ */
+
+declare(strict_types=1);
+
+const PS_ROOT = '/var/www/html';
+
+$candidates = [
+    PS_ROOT . '/app/config/parameters.php',
+    PS_ROOT . '/config/parameters.php',
+];
+
+$path = null;
+foreach ($candidates as $candidate) {
+    if (is_file($candidate)) {
+        $path = $candidate;
+        break;
+    }
+}
+
+if ($path === null) {
+    fwrite(STDERR, "e2e-db-params: no parameters.php found in:\n  " . implode("\n  ", $candidates) . "\n");
+    exit(1);
+}
+
+/** @var array{parameters?: array<string, mixed>} $config */
+$config = require $path;
+if (!is_array($config) || !isset($config['parameters']) || !is_array($config['parameters'])) {
+    fwrite(STDERR, "e2e-db-params: {$path} does not contain a 'parameters' array\n");
+    exit(1);
+}
+
+$env = static fn (string $name, string $fallback): string => (string) (getenv($name) ?: $fallback);
+
+$config['parameters']['database_host'] = $env('DB_SERVER', 'db');
+$config['parameters']['database_port'] = $env('DB_PORT', '3306');
+$config['parameters']['database_name'] = $env('DB_NAME', 'prestashop');
+$config['parameters']['database_user'] = $env('DB_USER', 'prestashop');
+$config['parameters']['database_password'] = $env('DB_PASSWD', 'prestashop');
+$config['parameters']['database_prefix'] = $env('DB_PREFIX', 'ps_');
+
+$export = var_export($config, true);
+file_put_contents($path, "<?php\n\nreturn {$export};\n");
+
+// PrestaShop 8 mirrors a subset of these into config/settings.inc.php for legacy code.
+$settings = PS_ROOT . '/config/settings.inc.php';
+if (is_file($settings)) {
+    $replacements = [
+        '_DB_SERVER_' => $config['parameters']['database_host'] . ':' . $config['parameters']['database_port'],
+        '_DB_NAME_' => $config['parameters']['database_name'],
+        '_DB_USER_' => $config['parameters']['database_user'],
+        '_DB_PASSWD_' => $config['parameters']['database_password'],
+        '_DB_PREFIX_' => $config['parameters']['database_prefix'],
+    ];
+    $contents = (string) file_get_contents($settings);
+    foreach ($replacements as $constant => $value) {
+        $contents = preg_replace(
+            "/define\('" . preg_quote($constant, '/') . "',\s*'[^']*'\);/",
+            "define('{$constant}', '" . addslashes((string) $value) . "');",
+            $contents,
+        ) ?? $contents;
+    }
+    file_put_contents($settings, $contents);
+}
+
+fwrite(
+    STDOUT,
+    sprintf(
+        "e2e-db-params: %s -> %s:%s/%s\n",
+        basename($path),
+        $config['parameters']['database_host'],
+        $config['parameters']['database_port'],
+        $config['parameters']['database_name'],
+    ),
+);

@@ -1,0 +1,19 @@
+{
+  "$comment": "Spec §4.3. `base` must be a PrestaShop *release* tag: the `x`-suffixed branch tags build from source at container start, which is slow and network-dependent. See DECISIONS.md D-004.",
+  "platform": "linux/amd64",
+  "targets": [
+    {
+      "tag": "8",
+      "ps": "8.2.2",
+      "php": "8.1",
+      "base": "prestashop/prestashop:8.2.2-8.1-apache"
+    },
+    {
+      "tag": "9",
+      "ps": "9.0.3",
+      "php": "bundled",
+      "base": "prestashop/prestashop:9.0.3-apache",
+      "$comment": "PrestaShop 9 release tags do not publish per-PHP variants the way 8.x does; only the `9.0.x-<php>` *branch* tags do, and those build from source at container start. The release tag's bundled PHP is used."
+    }
+  ]
+}
