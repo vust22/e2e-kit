@@ -721,3 +721,35 @@ flatten's collision behaviour once suspected, the manifest remap, and the matrix
 misses above were *integration* facts — another action's output contract, `upload-artifact` rooting
 behaviour, npm workspace resolution, and cwd — none of which are visible from a YAML parse or a unit
 test.
+
+---
+
+## D-029 — The floating `v1` tag tracks main, not package releases
+
+**Spec ref:** §10 ("the reusable workflow is consumed at `@v1` — floating major tag, moved on each
+release").
+
+**Decision:** `release.yml` moves `v1` to `main` on every successful run, independent of whether
+packages were published. Immutable `v<version>` tags still mark package releases only.
+
+**Why:** consumers pin `@v1` for the **reusable workflow**, which is code in this repository — not for
+the published packages. The spec's "moved on each release" conflates the two, and they move on
+different cadences: a bug fix to `e2e-reusable.yml` changes nothing about the packages and so produces
+no changeset and no release.
+
+**How this was found, because the failure mode is quiet.** `v1` was created pointing at the release
+commit, then four workflow fixes (D-028) landed on main. No changeset accompanied them — correctly, no
+package changed — so `release.yml` never moved `v1`, and it stayed frozen at the pre-fix commit. The
+kit's own `e2e-selftest.yml` did not catch this because it calls the reusable workflow by **local
+path** (`./.github/workflows/e2e-reusable.yml`), which always resolves to the current branch. Only a
+real consumer pinning `@v1` reads the tag — so the first Mollie fork PR was the first thing that could
+possibly surface it, and it did.
+
+**Consequence:** an unreviewed commit on main immediately becomes what every `@v1` consumer runs. That
+is inherent to a floating tag and the spec asks for one; `kit-ci.yml` gating main is what makes it
+tolerable. A consumer wanting immutability pins `@v<version>`.
+
+**Second consequence, worth stating:** `e2e-selftest.yml`'s local-path reference is a blind spot for
+anything tag-shaped. It is the right choice for testing the workflow's *content* against an unpushed
+branch, but it means tag resolution is only ever exercised by a real consumer — one more item on
+D-027's list of what the in-kit proof does not cover.

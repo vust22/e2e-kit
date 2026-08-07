@@ -52,13 +52,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # §10: an immutable `v<version>` tag per release, plus the floating `v1` consumers pin.
-      #
-      # Gated on OUR OWN result file, not `steps.changesets.outputs.published`. That output is derived
-      # by parsing the publish command's stdout for the `New tag:` lines `changeset publish` emits;
-      # publishing through a staging directory (D-025) never produces them, so the output is always
-      # false and this step silently never ran on the first real release.
-      - name: Tag the release and move the floating v1 tag
+      # An immutable `v<version>` tag per package release (§10), gated on OUR OWN result file rather
+      # than `steps.changesets.outputs.published`. That output is derived by parsing the publish
+      # command's stdout for the `New tag:` lines `changeset publish` emits; publishing through a
+      # staging directory (D-025) never produces them, so it is always false and this step silently
+      # never ran on the first real release.
+      - name: Tag the package release
         run: |
           set -euo pipefail
           if [ ! -f publish-result.json ]; then
@@ -68,11 +67,24 @@ jobs:
           published=$(node -p "require('./publish-result.json').published")
           version=$(node -p "require('./publish-result.json').version")
           if [ "$published" != "true" ]; then
-            echo "nothing was published; leaving tags alone"
+            echo "nothing published; no version tag to create"
             exit 0
           fi
-          echo "tagging v$version and moving v1"
+          echo "tagging v$version"
           git tag -f "v$version"
-          git tag -f v1
           git push -f origin "v$version"
+
+      # The floating `v1` moves on EVERY successful main build, not only when packages publish
+      # (DECISIONS.md D-029).
+      #
+      # Consumers pin `@v1` for the reusable *workflow*, which is code in this repository — not for the
+      # published packages. Tying v1 to package publication froze it at a pre-fix commit while four
+      # workflow bug fixes landed on main, so every consumer would have run the broken version. The two
+      # things move on different cadences and need different tags: `v<version>` is the immutable package
+      # release, `v1` is "the current v1-compatible state of the kit".
+      - name: Move the floating v1 tag
+        run: |
+          set -euo pipefail
+          git tag -f v1
           git push -f origin v1
+          echo "v1 -> $(git rev-parse --short HEAD)"
