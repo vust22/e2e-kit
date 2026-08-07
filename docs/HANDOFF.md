@@ -6,13 +6,14 @@ not derivable from the code.
 
 Last updated: 2026-08-07, end of a Phase 2 implementation pass.
 
-> **Read this first: three things are waiting on you.** All three are blocked on authorization or
-> credentials, not on work. See "What the repo owner needs to do" below.
+> **Read this first.** Phase 2's CI is **pushed and green** on `vust22/e2e-kit`: `images`, `release`,
+> `kit-ci` and `e2e-selftest` all pass, both packages are published at `0.2.0`, and the matched image
+> set is in GHCR. Four defects that only CI could surface were found and fixed — see D-028.
 >
-> 1. The Phase 2 workflows are **committed locally but not pushed** — the `vust22` token lacks the
->    `workflow` scope and GitHub rejects the push.
-> 2. The Mollie fork overlay is **committed locally with its push remote disabled**.
-> 3. Because of (1), **no workflow has ever run**, so Phase 2 is not verified and not DoD-complete.
+> **One thing is still waiting on you:** the Mollie fork overlay is committed locally with its push
+> remote disabled, and pushing it is what closes Phase 2's DoD. Until then the **cross-repository path
+> is unproven** (D-027), and `e2e-reusable.yml` carries three kit-only compile steps that exist purely
+> because the selftest is not a real consumer.
 
 ---
 
@@ -20,21 +21,21 @@ Last updated: 2026-08-07, end of a Phase 2 implementation pass.
 
 - **Spec:** `/Users/justas/Downloads/e2e-platform-spec.md` (v1.1.0-draft). It is the single
   source of truth; the repo implements it. Read §0 before starting a phase.
-- **Deviations:** `DECISIONS.md`, entries D-001 … D-019. Add a new entry for any further
-  deviation rather than silently diverging. D-014 … D-019 are all Phase 3.
+- **Deviations:** `DECISIONS.md`, entries D-001 … D-028. Add a new entry for any further
+  deviation rather than silently diverging. D-014 … D-022 are Phase 3; D-023 … D-028 are Phase 2.
 - **Verified module facts:** `pilots/mollie/e2e/NOTES.md` — resolves the §6.1 agent note, and is
   the first thing to read before touching anything Mollie-shaped.
 - **Conventions:** `CONTRIBUTING.md` (mirror of spec §7).
 
 ## State as of this handoff
 
-**Phase 1 and Phase 3 (mock mode) are complete and verified green. Phase 2 is written but unverified**
-— every workflow exists and is committed, none has ever executed.
+**Phases 1, 2 and 3 (mock mode) are green.** Phase 2's CI has run for real on GitHub; its DoD is still
+open only because the cross-repository proof needs the Mollie fork PR.
 
 | Phase | State |
 |---|---|
 | 1 — kit skeleton, packages, seeded PS 8/9 images, compose, CLI | done, 8/8 green on both PS 8 and PS 9 |
-| 2 — CI, publishing, onboarding | **written, committed locally, never run.** Five workflows + composite action + `ci-matrix` command + scope remap + ONBOARDING.md. Push blocked on the `workflow` token scope; **not DoD-complete** (D-027) |
+| 2 — CI, publishing, onboarding | **green on GitHub.** `images`, `release`, `kit-ci`, `e2e-selftest` all pass; `@vust22/e2e-{core,prestashop}@0.2.0` published; image set `f24a28e` in GHCR; tags `v0.2.0` / `v1`. **Not DoD-complete** — cross-repo proof missing (D-027) |
 | 3 — Mollie pilot | mock mode complete and green on PS 8 + PS 9 (31/31, re-verified 2026-08-07); sandbox not yet run; fork overlay staged locally, unpushed |
 | 4 — self-healing | export surface only; `healingReporter` **throws if enabled**. See "Phase 4 notes" below — the spec's model and `temperature` need updating |
 | 5 — second module onboarding | not started |
@@ -44,71 +45,48 @@ Last updated: 2026-08-07, end of a Phase 2 implementation pass.
 `origin` is `https://github.com/vust22/e2e-kit.git` (HTTPS, via the `gh` credential helper — see the
 SSH note below). The repo is **public**. Default branch `main`.
 
-**Pushed:** the four commits that landed Phase 3 and the design docs, plus `ci-matrix` and the release
-tooling — seven commits total.
+Everything is pushed. Phase 3's work, the design docs, `ci-matrix`, the release tooling, the five
+workflows, and the four CI fixes from D-028.
 
-**Committed but NOT pushed:** one commit, `ci: images, release, kit-ci, reusable job graph and selftest
-workflows`. GitHub rejects it:
+**Why the remote is HTTPS, not SSH.** `ssh -T git@github.com` authenticates as **`justelis22`**, not
+`vust22`, and `justelis22` has no write access to `vust22/e2e-kit` — while the repo was private this
+presented as a misleading `ERROR: Repository not found`. The remote therefore uses HTTPS with the
+`gh`-stored `vust22` token. That token initially lacked the `workflow` scope, which blocked every push
+touching `.github/workflows/`; it has since been refreshed. If pushes start failing again with
+`refusing to allow an OAuth App to create or update workflow ... without 'workflow' scope`, re-run:
 
+```bash
+gh auth refresh -h github.com -s workflow,write:packages,read:packages
 ```
-! [remote rejected] main -> main (refusing to allow an OAuth App to create or update
-  workflow `.github/workflows/e2e-reusable.yml` without `workflow` scope)
-```
 
-**Why SSH does not work here.** `ssh -T git@github.com` authenticates as **`justelis22`**, not
-`vust22`, and `justelis22` has no write access to `vust22/e2e-kit`. While the repo was private this
-presented as a confusing `ERROR: Repository not found`. The remote is therefore HTTPS, which uses the
-`gh`-stored `vust22` token — and that token is missing the `workflow` scope. An SSH key registered to
-`vust22` would also solve it (SSH pushes are not scope-limited), but adding a credential to your GitHub
-account is not something an autonomous session should do on your behalf.
+An SSH key registered to `vust22` would also work (SSH pushes are not scope-limited).
 
 The Mollie module clone at `/Users/justas/e2e-playbook/mollie-module` remains **read-only by standing
 instruction** and was not touched. A separate clone of the fork now exists at
 `/Users/justas/e2e-playbook/mollie-fork` with the overlay committed on `e2e-kit-adoption` and its
 **push remote set to `DISABLED`** as a guard.
 
-Nothing is published yet: no image has been pushed to GHCR and no package to GitHub Packages, because
-both happen from workflows that cannot be pushed. Local tags (`e2e-ps:8`, `e2e-ps:9`,
-`e2e-mock-mollie:latest`) and workspace file links are unchanged, so the daily loop works exactly as
-before.
+**Published.** GHCR holds the matched set `f24a28e` — `e2e-ps:8-f24a28e`, `e2e-ps:9-f24a28e`,
+`e2e-mock-mollie:f24a28e`, each with a moving `-main` alias. GitHub Packages holds
+`@vust22/e2e-core@0.2.0` and `@vust22/e2e-prestashop@0.2.0`. All are **public**, inherited automatically
+from the public repo — the explicit visibility PATCH the plan called for turned out to be unnecessary.
+
+Local tags (`e2e-ps:8`, `e2e-ps:9`, `e2e-mock-mollie:latest`) and workspace file links are unchanged, so
+the daily loop works exactly as before — CI pulls from GHCR by setting `E2E_PS_IMAGE`, it does not
+change the local default.
 
 ---
 
 ## What the repo owner needs to do
 
-**1. Grant the token the scopes it needs, then push.** One command, then one push:
+**Only step 1 is outstanding.** Everything else already ran.
 
-```bash
-gh auth refresh -h github.com -s workflow,write:packages,read:packages
-cd /Users/justas/e2e-playbook/e2e-kit
-git push origin main
-```
-
-**2. Run the workflows in this order.** They have dependencies: the reusable workflow pulls published
-images, and the consumer stub pins `@v1`, which does not exist until a release runs.
-
-```bash
-gh workflow run images.yml --repo vust22/e2e-kit      # publishes the matched image set
-# then make both GHCR packages public so a consumer's own token can pull them:
-gh api -X PATCH /user/packages/container/e2e-ps          --field visibility=public
-gh api -X PATCH /user/packages/container/e2e-mock-mollie --field visibility=public
-
-# release.yml runs automatically on the push above and opens a "Version Packages" PR.
-# Merge it — that publishes the packages and moves the floating v1 tag.
-gh pr list --repo vust22/e2e-kit
-
-gh workflow run e2e-selftest.yml --repo vust22/e2e-kit   # proves e2e-reusable.yml end to end
-```
-
-`kit-ci.yml` fires on the next PR by itself. **Expect to iterate** — none of these has ever executed,
-so treat the first runs as debugging, and read a failing job's log before editing the workflow.
-
-**3. Push the Mollie overlay and open its PR** — the last Phase 3 carry-over bullet, and the only thing
-that closes the cross-repository gap in D-027:
+**1. Push the Mollie overlay and open its PR** — the last Phase 3 carry-over bullet, and the only thing
+that closes the cross-repository gap D-027 records:
 
 ```bash
 cd /Users/justas/e2e-playbook/mollie-fork
-git remote set-url --push origin https://github.com/vust22/mollie.git   # re-enable the guard
+git remote set-url --push origin https://github.com/vust22/mollie.git   # lift the guard
 git push -u origin e2e-kit-adoption
 gh pr create --repo vust22/mollie --base master \
   --title "test(e2e): adopt the Invertus E2E kit" \
@@ -118,8 +96,32 @@ gh pr create --repo vust22/mollie --base master \
 Then protect `master` requiring `e2e-mock (ps-8)` and `e2e-mock (ps-9)` — and **not** the sandbox jobs
 (§8.3).
 
-**Expected result of that PR:** `31 passed, 3 skipped` on both platform versions, matching the local
-run exactly. Any divergence is a real finding about the cross-repo path, not noise.
+**Expected result:** `31 passed, 3 skipped` on both platform versions, matching the local run exactly.
+Any divergence is a real finding about the cross-repo path, not noise. One thing to watch: the fork's
+`package.json` pins `^0.1.0` for the two alias devDeps while the published version is now **0.2.0**. The
+caret resolves it, but confirm the install actually picks 0.2.0.
+
+**2. Then delete the selftest seam.** `e2e-reusable.yml` carries three `Compile the workspace (kit repo
+only)` steps guarded on `github.repository`. They exist solely because `npx e2e-kit` resolves through the
+npm workspace inside the kit; a real consumer resolves it to the installed package, which ships a
+prebuilt `dist`. Once the fork PR is green those steps are dead weight, and removing them is the signal
+that the cross-repo path is genuinely proven (D-028 item 4).
+
+**Already done — no action needed:**
+
+- `images` green — matched set `f24a28e` in GHCR, all three images sharing the suffix (D-026).
+- `release` green — both packages published at `0.2.0`, version-locked; tags `v0.2.0` and `v1` exist.
+- `kit-ci` green — example module 8/8 on PS 8 (3m54s) and PS 9 (5m37s). **PS 9 runs in 5–6 min on a
+  native-amd64 runner versus 13.2 min under local emulation** — worth knowing before optimising anything
+  based on local timings.
+- `e2e-selftest` green — the whole §8.1 graph: `prepare` → `e2e-mock` (8 and 9) → `e2e-sandbox` correctly
+  skipped (the example module declares no `psp`) → `report` → `heal` correctly skipped. The report zip was
+  downloaded and verified: both platform versions merged into one view, 8/8 each, no duplicates.
+
+**One repo setting was changed on your behalf.** "Allow GitHub Actions to create and approve pull
+requests" was off, which made `release` fail with `GitHub Actions is not permitted to create or approve
+pull requests` — it is the documented requirement for `changesets/action`. It is now on. That is a real,
+if small, permission broadening; review it if you would rather create release PRs by hand.
 
 ## Environment gotchas on this machine
 

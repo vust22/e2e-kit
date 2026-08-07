@@ -674,3 +674,50 @@ The gap is recorded in `docs/HANDOFF.md` as the first thing to close.
 **Revisit when:** the owner green-lights pushing the Mollie fork branch. The overlay is already
 committed locally at `/Users/justas/e2e-playbook/mollie-fork` on `e2e-kit-adoption`; pushing it and
 opening the PR closes both this entry and the last Phase 3 carry-over bullet.
+
+---
+
+## D-028 — Four Phase 2 bugs only CI could surface, and what they say about the selftest
+
+**Spec ref:** §8.1, §8.2, §10; DECISIONS.md D-027.
+
+**Context:** every Phase 2 workflow was YAML-validated and its non-trivial logic unit-tested offline
+before the first push. Four defects still survived to the first real runs. Recording them because each
+one is a class of mistake that offline verification structurally cannot catch, and because two of them
+are evidence about D-027 rather than mere bugs.
+
+1. **`changesets/action`'s `published` output is derived by parsing stdout.** It looks for the
+   `New tag:` lines `changeset publish` emits. Publishing through a staging directory (D-025) never
+   produces them, so the output was always false and the release job **silently skipped tagging** —
+   packages published at `0.2.0` with no `v0.2.0` and no `v1`. Since consumers pin `@v1` and the
+   `report` job checks out `ref: v1`, nothing downstream could have worked. Fixed by gating on a
+   `publish-result.json` the publisher writes itself; the missing tags were created by hand once.
+
+2. **Identically-named artifacts silently overwrite when flattened.** Every shard's blob artifact
+   contains `report-1.zip`. A plain `cp` into one directory keeps one and discards the rest, and the
+   merged report then shows a *fraction* of the tests **as though the run were complete** — a
+   green-looking report that is quietly wrong. Fixed with a unique prefix per artifact.
+
+3. **`**/blob-report` matched `node_modules`.** npm workspaces symlink the consumer package into
+   `node_modules/@invertus/<name>`, so the glob collected the same reports twice at a different depth.
+   Fixed by uploading the consumer's `blob-report` explicitly.
+
+4. **Two failures were the selftest not being a real consumer** — and this is the part that matters
+   beyond the fixes. Inside the kit, `npx e2e-kit` resolves through the workspace to
+   `packages/core/bin/e2e-kit.js`, whose `dist/` does not exist after a bare `npm ci`, so the CLI died
+   with `ERR_MODULE_NOT_FOUND`; and `e2e-kit test` looks for `playwright.config.ts` in the working
+   directory, which is the repo root for a real consumer but not for `examples/consumer-module`. The
+   first needed a **kit-only** compile step guarded on `github.repository`; the second was fixed
+   generally, by deriving the consumer root from `config-path`.
+
+**Why item 4 is the important one:** a workflow step that exists *only* when the caller is the kit is a
+seam, and it is exactly the seam D-027 predicted. The selftest proves the job graph, the matrix, the
+image pull, the merge and the report. It does not prove the cross-repository path, and it needed a
+kit-shaped exception to pass at all. **That step should be deleted the moment the Mollie fork PR runs
+green**, and its presence is the clearest signal that Phase 2's DoD is still open.
+
+**What offline verification did catch**, for calibration: the report reducer's aggregation, the
+flatten's collision behaviour once suspected, the manifest remap, and the matrix expansion. All four
+misses above were *integration* facts — another action's output contract, `upload-artifact` rooting
+behaviour, npm workspace resolution, and cwd — none of which are visible from a YAML parse or a unit
+test.
