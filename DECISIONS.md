@@ -1011,3 +1011,41 @@ has no CommonJS equivalent, so a dual build needs that reworked first.
 
 **Consequence:** `.e2e-kit/` must be gitignored in a consumer repo, which ONBOARDING.md now states. The
 generated file carries a `GENERATED — do not edit, and do not commit` header.
+
+---
+
+## D-035 — Report paths are absolute, and a run that collects no reports fails
+
+**Spec ref:** §8.1 (the report job), §8.2 (artifacts).
+
+**What happened.** The first fully-passing Mollie fork run reported **green with an empty report**: all
+four mock shards succeeded, and the uploaded zip contained a `summary.json` with zero specs and no
+`index.html`. The shard durations (4m33s, 5m6s, 7m7s, 13m49s) show the suite genuinely ran and passed —
+but nothing was captured, and the pipeline could not tell the difference.
+
+**Two independent defects, and the second is the serious one.**
+
+1. **Relative reporter paths resolve against the config file's directory, not the working directory.**
+   The preset declared `outputDir: 'test-results'`, `outputFolder: 'playwright-report'` and
+   `blob → outputDir: 'blob-report'`. Once the kit began generating the Playwright config inside
+   `.e2e-kit/` (D-034), those resolved to `.e2e-kit/blob-report`, while the workflow uploaded
+   `<consumer-dir>/blob-report`. All three are now `path.resolve(process.cwd(), …)` — anchored on the
+   directory the CLI was invoked from, which is the consumer repo root in both CI and local use.
+
+2. **The report job treated "no reports found" as a warning and exited 0.** So a collection failure was
+   indistinguishable from a clean run for anyone reading the check mark — and strictly worse than a red
+   build, because it actively asserts success. Both no-reports branches in the `report-zip` action now
+   emit `::error` and `exit 1`.
+
+**Why this is the most dangerous defect of the nine.** Every other one failed loudly. This one produced
+a green tick over an empty artifact, and it did so on the very run that was supposed to be Phase 2's
+acceptance evidence. Had it not been checked by downloading the artifact and counting specs, "the Mollie
+fork PR is green" would have gone into the handoff as proof of something that had not been demonstrated.
+
+**The practice worth keeping:** a green pipeline is a claim about the pipeline, not about the tests. The
+acceptance check is the artifact — download it and count. Item 4 of the §8 verification list is written
+that way for exactly this reason, and it is what caught this.
+
+**Consequence:** `kit-ci.yml` and `e2e-selftest.yml` were unaffected (their consumers have hand-written
+configs at the repo root, so the relative paths resolved correctly) — which is a tenth instance of the
+kit's own setup masking a consumer-only defect.

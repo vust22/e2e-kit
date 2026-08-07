@@ -37,9 +37,12 @@ runs:
         blobs=(${{ inputs.blob-glob }})
         mkdir -p merged-report
         if [ ${#blobs[@]} -eq 0 ]; then
-          echo "::warning title=No reports::no blob report directories found for mode=${{ inputs.mode }}"
+          # FAIL, do not warn. A run that collects no reports previously finished GREEN with an empty
+          # report — the worst possible outcome, because "all shards passed" and "we captured nothing"
+          # are indistinguishable to anyone reading the checkmark (DECISIONS.md D-035).
+          echo "::error title=No reports collected::no blob report directories matched '${{ inputs.blob-glob }}' for mode=${{ inputs.mode }}. The shards may have run without producing reports — treat this as a failed run, not an empty one."
           echo '{"suites":[]}' > merged-report/summary.json
-          exit 0
+          exit 1
         fi
 
         # `merge-reports` wants the report zips DIRECTLY in one directory — it does not recurse into
@@ -64,9 +67,9 @@ runs:
         count=$(find all-blobs -maxdepth 1 -type f -name '*.zip' | wc -l | tr -d ' ')
         echo "merging $count blob report(s) from ${#blobs[@]} artifact directory(ies)"
         if [ "$count" -eq 0 ]; then
-          echo "::warning title=No reports::artifact directories contained no report zips"
+          echo "::error title=No reports collected::${#blobs[@]} artifact directory(ies) contained no report zips. Treat this as a failed run — see D-035."
           echo '{"suites":[]}' > merged-report/summary.json
-          exit 0
+          exit 1
         fi
 
         # `merge-reports` writes the HTML report to ./playwright-report and the JSON to stdout.

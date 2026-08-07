@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { defineConfig, devices, type PlaywrightTestConfig } from '@playwright/test';
 import type { E2EConfig } from '../config/schema.js';
 import { resolveShopEnvironment } from '../fixtures/environment.js';
@@ -39,12 +40,19 @@ export function definePlaywrightConfig(opts: PresetOptions): PlaywrightTestConfi
     workers: config.psp ? 1 : isCI ? 2 : undefined,
     timeout: 90_000,
     expect: { timeout: 15_000 },
-    outputDir: 'test-results',
+    // Absolute, anchored on the directory the CLI was invoked from — the consumer repo root.
+    //
+    // Relative reporter/output paths are resolved against the *config file's* directory. Since the kit
+    // may generate that config inside `.e2e-kit/` (D-034), a relative path put artifacts somewhere the
+    // workflow does not look: CI collected nothing and the run still reported green (D-035).
+    outputDir: path.resolve(process.cwd(), 'test-results'),
 
     reporter: [
       ['list'],
-      ['html', { open: 'never', outputFolder: 'playwright-report' }],
-      ...(isCI ? ([['blob', { outputDir: 'blob-report' }]] as const) : []),
+      ['html', { open: 'never', outputFolder: path.resolve(process.cwd(), 'playwright-report') }],
+      ...(isCI
+        ? ([['blob', { outputDir: path.resolve(process.cwd(), 'blob-report') }]] as const)
+        : []),
     ] as PlaywrightTestConfig['reporter'],
 
     use: {
