@@ -1,5 +1,12 @@
 # @invertus/e2e-core
 
+## 0.2.3
+
+### Patch Changes
+
+- e1eeddc: Ship the compose files inside `@invertus/e2e-core` and resolve them from the package root, so
+  `e2e-kit up` works in a consumer repository. See DECISIONS.md D-033.
+
 ## 0.2.2
 
 ### Patch Changes
