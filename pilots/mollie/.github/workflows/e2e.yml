@@ -4,9 +4,6 @@
 # building the module, running the matrix, publishing the report — lives in the kit's reusable
 # workflow, so a kit release upgrades every consumer at once (Goal 1).
 #
-# NOTE: `e2e-reusable.yml` is Phase 2 work and does not exist yet, so this stub is not runnable
-# today. It is committed now because it is part of the file set Phase 3 has to prove is
-# sufficient, and reviewing it alongside the config is the point.
 name: e2e
 
 on:
@@ -15,6 +12,16 @@ on:
     branches: [master, main]
   schedule:
     - cron: '0 3 * * *'
+
+# Declared explicitly because GitHub defaults GITHUB_TOKEN to read-only on many repositories (always
+# on forks). A called workflow cannot exceed what its caller was granted, so without this the run fails
+# at startup with no jobs and no logs — see DECISIONS.md D-030.
+#
+# `pull-requests: write` is used only to post the run's summary comment.
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
 
 jobs:
   e2e:

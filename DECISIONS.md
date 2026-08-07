@@ -753,3 +753,35 @@ tolerable. A consumer wanting immutability pins `@v<version>`.
 anything tag-shaped. It is the right choice for testing the workflow's *content* against an unpushed
 branch, but it means tag resolution is only ever exercised by a real consumer — one more item on
 D-027's list of what the in-kit proof does not cover.
+
+---
+
+## D-030 — `pull-requests: write` lives on the `report` job, and the consumer stub declares its own permissions
+
+**Spec ref:** §5.2 (the normative workflow stub), §8.1.
+
+**Decision:** `e2e-reusable.yml` requests only `contents: read` and `packages: read` at workflow level;
+`pull-requests: write` is declared on the `report` job alone. The §5.2 consumer stub gains an explicit
+`permissions:` block granting all three.
+
+**Why:** GitHub defaults `GITHUB_TOKEN` to **read-only** on many repositories, and always on forks. A
+called workflow cannot be granted more than its caller holds, so a workflow-level
+`pull-requests: write` made the entire run fail with `startup_failure` — **no jobs, no logs, no
+annotation beyond "this run likely failed because of a workflow file issue."** Nothing about that
+message points at permissions, which makes it an expensive failure to diagnose.
+
+**How this was found, and why it matters more than the fix.** The kit's own repository has
+`default_workflow_permissions: write` — I had set it earlier to let `changesets/action` open the release
+PR (see D-028's note on that setting). So `e2e-selftest.yml` passed while the identical workflow could
+not start in any consumer with GitHub's default settings. This is the **second** consumer-facing defect
+the in-kit proof concealed, after the workspace-resolution seam in D-028 item 4, and both were concealed
+for the same structural reason: the kit is not a typical consumer, and its own configuration is
+unrepresentative in ways that are invisible from inside it.
+
+That is now three items on the list of what `e2e-selftest.yml` cannot cover (with D-029's tag
+resolution), which is the concrete argument for treating the Mollie fork PR as Phase 2's real
+acceptance gate rather than a nice-to-have.
+
+**Consequence:** the §5.1 "2-file adoption" is unchanged in file count — the permissions block lives
+inside the stub that was already file #1. A consumer forbidden from elevating the token can drop
+`pull-requests: write` and lose only the summary comment; the matrix and the report zip are unaffected.

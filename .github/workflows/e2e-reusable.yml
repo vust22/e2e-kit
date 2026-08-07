@@ -32,10 +32,13 @@ on:
         default: vust22
         type: string
 
+# Least privilege at the workflow level: every job needs to read the repo and the published packages,
+# and nothing more. `pull-requests: write` is declared on the `report` job alone (DECISIONS.md D-030) —
+# requesting it here made the whole workflow fail to start on any consumer whose repository defaults
+# GITHUB_TOKEN to read-only, which is GitHub's default for forks.
 permissions:
   contents: read
   packages: read
-  pull-requests: write
 
 env:
   E2E_PLATFORM: linux/amd64
@@ -301,6 +304,13 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Only this job writes anything, and only to post/update the PR comment. A consumer whose repo
+    # defaults to read-only tokens must declare `pull-requests: write` in its own caller stub for the
+    # comment to work; the matrix jobs run either way.
+    permissions:
+      contents: read
+      packages: read
+      pull-requests: write
     steps:
       # The composite action lives in the kit, so the kit is what gets checked out here — the caller's
       # own tree is irrelevant to merging reports.

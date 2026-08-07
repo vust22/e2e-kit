@@ -29,6 +29,14 @@ on:
   schedule:
     - cron: '0 3 * * *'
 
+# Required. GitHub defaults GITHUB_TOKEN to read-only on many repositories — always on forks — and a
+# called workflow cannot exceed what its caller was granted. Omit this and the run fails at startup
+# with no jobs and no logs, which is a genuinely hard failure to read (D-030).
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+
 jobs:
   e2e:
     uses: vust22/e2e-kit/.github/workflows/e2e-reusable.yml@v1
@@ -36,6 +44,9 @@ jobs:
       config-path: e2e/e2e.config.ts
     secrets: inherit
 ```
+
+If your organisation forbids elevating `GITHUB_TOKEN` beyond read-only, drop `pull-requests: write`.
+The matrix still runs; you lose only the summary comment, and the report zip is unaffected.
 
 `@v1` is a floating major tag the kit moves on each release, so you get fixes without editing this
 file. Pin `@v1.2.3` if you need to freeze.
