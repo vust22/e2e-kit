@@ -1,0 +1,16 @@
+{
+  "name": "@invertus/e2e-mock-mollie",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mollie /v2 API mock for E2E runs (spec §6.4). Not published to npm; shipped as a container image.",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "start": "node src/server.mjs",
+    "test": "node --test test/"
+  },
+  "dependencies": {
+    "fastify": "5.2.1",
+    "@fastify/formbody": "8.0.2"
+  }
+}
