@@ -65,6 +65,17 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm ci
 
+      # SELFTEST SEAM (D-027). When the caller *is* the kit, `npx e2e-kit` resolves through the npm
+      # workspace to packages/core/bin/e2e-kit.js, whose dist/ does not exist after a bare `npm ci` —
+      # so the CLI dies with ERR_MODULE_NOT_FOUND. A real consumer resolves npx to the *installed*
+      # @vust22/e2e-core, which ships a prebuilt dist and needs no compile.
+      #
+      # That this step is needed at all is the clearest evidence that e2e-selftest.yml is not a
+      # substitute for a real consumer repository. Delete it once the cross-repo proof exists.
+      - name: Compile the workspace (kit repo only)
+        if: github.repository == format('{0}/e2e-kit', inputs.kit-owner)
+        run: npx tsc --build
+
       - id: matrix
         run: |
           set -euo pipefail
@@ -101,6 +112,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm ci
+
+      # SELFTEST SEAM (D-027). When the caller *is* the kit, `npx e2e-kit` resolves through the npm
+      # workspace to packages/core/bin/e2e-kit.js, whose dist/ does not exist after a bare `npm ci` —
+      # so the CLI dies with ERR_MODULE_NOT_FOUND. A real consumer resolves npx to the *installed*
+      # @vust22/e2e-core, which ships a prebuilt dist and needs no compile.
+      #
+      # That this step is needed at all is the clearest evidence that e2e-selftest.yml is not a
+      # substitute for a real consumer repository. Delete it once the cross-repo proof exists.
+      - name: Compile the workspace (kit repo only)
+        if: github.repository == format('{0}/e2e-kit', inputs.kit-owner)
+        run: npx tsc --build
       - run: npx playwright install --with-deps chromium
 
       - name: Build the module
@@ -206,6 +228,17 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npm ci
+
+      # SELFTEST SEAM (D-027). When the caller *is* the kit, `npx e2e-kit` resolves through the npm
+      # workspace to packages/core/bin/e2e-kit.js, whose dist/ does not exist after a bare `npm ci` —
+      # so the CLI dies with ERR_MODULE_NOT_FOUND. A real consumer resolves npx to the *installed*
+      # @vust22/e2e-core, which ships a prebuilt dist and needs no compile.
+      #
+      # That this step is needed at all is the clearest evidence that e2e-selftest.yml is not a
+      # substitute for a real consumer repository. Delete it once the cross-repo proof exists.
+      - name: Compile the workspace (kit repo only)
+        if: github.repository == format('{0}/e2e-kit', inputs.kit-owner)
+        run: npx tsc --build
 
       - if: steps.guard.outputs.skip == 'false'
         run: npx playwright install --with-deps chromium
