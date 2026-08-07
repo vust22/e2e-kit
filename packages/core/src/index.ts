@@ -95,7 +95,12 @@ export {
   type WaitForHttpOptions,
 } from './env/index.js';
 
-export { definePlaywrightConfig, type PresetOptions } from './reporting/index.js';
+export {
+  definePlaywrightConfig,
+  synthesizePlaywrightConfig,
+  resolveSpecDir,
+  type PresetOptions,
+} from './reporting/index.js';
 
 export {
   prepareModule,

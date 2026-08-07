@@ -52,6 +52,7 @@ const {
   waitForQuickTunnel,
   assertTunnelReachesShop,
   ciMatrix,
+  synthesizePlaywrightConfig,
 } = core;
 
 // --- argument parsing ----------------------------------------------------------------
@@ -228,13 +229,15 @@ async function cmdUp() {
 
 async function cmdTest() {
   const state = readStackStateOrThrow(cwd);
-  const { configPath } = await loadConfig();
+  const { config, configPath } = await loadConfig();
 
-  const playwrightConfig = flag('playwright-config', undefined) ?? findPlaywrightConfig();
-  if (!playwrightConfig) {
-    fail(
-      'No playwright.config.ts found. Add one that calls definePlaywrightConfig(), or pass --playwright-config.',
-    );
+  // A hand-written config wins when present, so a consumer can still pass `overrides` to
+  // definePlaywrightConfig. Otherwise the kit generates one (DECISIONS.md D-034) — which is what keeps
+  // the adoption at the two files spec §5.1 promises, and what makes it work in a CommonJS repo.
+  const explicit = flag('playwright-config', undefined) ?? findPlaywrightConfig();
+  const playwrightConfig = explicit ?? synthesizePlaywrightConfig({ cwd, config, configPath });
+  if (!explicit) {
+    info(`Generated ${path.relative(cwd, playwrightConfig)} from ${path.basename(configPath)}`);
   }
 
   const passthrough = [];

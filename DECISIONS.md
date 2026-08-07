@@ -936,9 +936,9 @@ cannot see — inside the kit, the repo root genuinely is three levels up.
 
 ---
 
-## D-034 — OPEN: the consumer needs a Playwright config the file set never mentioned, and it only loads under ESM
+## D-034 — The kit synthesises the Playwright config, restoring the two-file adoption
 
-**Status: unresolved — needs a decision.** Two coupled findings from the first real consumer run.
+**Status: resolved** via option 1 below. Two coupled findings from the first real consumer run.
 
 **Spec ref:** §5.1 (the "2-file adoption"), §5.5, §8.2.
 
@@ -982,7 +982,19 @@ seventh and eighth consumer-only defect (after D-028 item 4, D-029, D-030, D-031
    with existing CommonJS tooling, and it would need documenting as a hard prerequisite — which
    contradicts "2 files, no other changes".
 
-**Recommendation: option 1**, with option 2 as a later robustness improvement rather than a prerequisite.
+**Implemented: option 1.** `synthesizePlaywrightConfig()` in
+`packages/core/src/reporting/synthesizeConfig.ts` writes `.e2e-kit/playwright.config.ts` plus
+`.e2e-kit/package.json` containing `{"type":"module"}`, and `e2e-kit test` passes it via `--config`.
+`testDir` is derived from `suites.custom` by truncating at the first glob character, falling back to
+`<configDir>/specs`. A hand-written `playwright.config.ts` in the consumer still wins when present, so
+the `overrides` escape hatch survives.
 
-**Revisit:** immediately — this is the last known blocker on the Mollie fork PR, which is Phase 2's
-acceptance gate.
+**Verified** with six unit tests plus a live run: with the pilot's own config hidden, the generated one
+loaded and ran `3 passed` against a running stack, and the ESM marker was written as intended.
+
+**Option 2 is still worth doing later** — publishing a CJS build and adding a `require` condition would
+make the package usable from hand-written CJS configs too. It is no longer a prerequisite, because
+nothing in the default path requires a CJS entry point now.
+
+**Consequence:** `.e2e-kit/` must be gitignored in a consumer repo, which ONBOARDING.md now states. The
+generated file carries a `GENERATED — do not edit, and do not commit` header.
