@@ -1,5 +1,12 @@
 # @invertus/e2e-core
 
+## 0.2.4
+
+### Patch Changes
+
+- d1ac764: Generate the Playwright config in `.e2e-kit/` when the consumer has none, so the adoption really is two
+  files and works in a CommonJS repository. See DECISIONS.md D-034.
+
 ## 0.2.3
 
 ### Patch Changes
