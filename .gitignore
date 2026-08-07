@@ -23,3 +23,6 @@ images/prestashop/seed/manifest.json
 .DS_Store
 .env
 .env.local
+
+# Written by scripts/publish-all.mjs for release.yml to read; never committed.
+publish-result.json

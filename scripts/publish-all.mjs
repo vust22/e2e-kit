@@ -12,9 +12,20 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
+
+/**
+ * Where the outcome is recorded for the workflow to read.
+ *
+ * `changesets/action` derives its own `published` output by **parsing the publish command's stdout for
+ * the `New tag:` lines that `changeset publish` emits**. This script publishes through a staging
+ * directory instead (D-025), so it never produces those lines and that output is always false — which
+ * silently skipped the tag step on the first real release. Reporting the result in a file we own is
+ * explicit and does not depend on another action's parsing.
+ */
+const RESULT_FILE = 'publish-result.json';
 
 const PACKAGES = ['packages/core', 'packages/prestashop'];
 const SCOPE = process.env.PUBLISH_SCOPE ?? 'vust22';
@@ -36,20 +47,30 @@ function alreadyPublished(name, version) {
   return view.status === 0 && view.stdout.trim() === version;
 }
 
-let published = false;
+const publishedPackages = [];
+/** All packages share one version (`fixed` in .changeset/config.json, per spec §10). */
+let version = null;
+
 for (const pkg of PACKAGES) {
   const staging = path.join('/tmp', `publish-${path.basename(pkg)}`);
   runOrDie('node', ['scripts/prepare-publish.mjs', pkg, staging, '--scope', SCOPE]);
 
   const manifest = JSON.parse(readFileSync(path.join(staging, 'package.json'), 'utf8'));
+  version ??= manifest.version;
+
   if (alreadyPublished(manifest.name, manifest.version)) {
     console.log(`skip: ${manifest.name}@${manifest.version} is already published`);
     continue;
   }
 
   runOrDie('npm', ['publish', '--registry', REGISTRY, '--access', 'public'], { cwd: staging });
-  published = true;
+  publishedPackages.push(`${manifest.name}@${manifest.version}`);
 }
 
-// changesets/action reads stdout to decide whether post-publish steps run.
-console.log(published ? 'published' : 'nothing to publish');
+const result = { published: publishedPackages.length > 0, version, packages: publishedPackages };
+writeFileSync(RESULT_FILE, `${JSON.stringify(result, null, 2)}\n`);
+console.log(
+  result.published
+    ? `published ${publishedPackages.join(', ')}`
+    : 'nothing to publish (every version already exists in the registry)',
+);

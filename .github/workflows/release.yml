@@ -52,10 +52,27 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # §10: consumers pin `@v1`, a floating major tag moved on each release.
-      - name: Move the floating v1 tag
-        if: steps.changesets.outputs.published == 'true'
+      # §10: an immutable `v<version>` tag per release, plus the floating `v1` consumers pin.
+      #
+      # Gated on OUR OWN result file, not `steps.changesets.outputs.published`. That output is derived
+      # by parsing the publish command's stdout for the `New tag:` lines `changeset publish` emits;
+      # publishing through a staging directory (D-025) never produces them, so the output is always
+      # false and this step silently never ran on the first real release.
+      - name: Tag the release and move the floating v1 tag
         run: |
           set -euo pipefail
+          if [ ! -f publish-result.json ]; then
+            echo "no publish-result.json — the publish command did not run this time"
+            exit 0
+          fi
+          published=$(node -p "require('./publish-result.json').published")
+          version=$(node -p "require('./publish-result.json').version")
+          if [ "$published" != "true" ]; then
+            echo "nothing was published; leaving tags alone"
+            exit 0
+          fi
+          echo "tagging v$version and moving v1"
+          git tag -f "v$version"
           git tag -f v1
+          git push -f origin "v$version"
           git push -f origin v1
