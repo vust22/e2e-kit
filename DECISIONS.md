@@ -250,3 +250,261 @@ part of its own setup, and disables it again in teardown.
 default, on by explicit test action" keeps the seeded shop deterministic for payment
 modules under test (no stray second payment option in the checkout list, which would make
 `selectPaymentModule` ambiguous) while still allowing the Phase 1 DoD flow to run.
+
+---
+
+## D-014 — The E2E CA is appended to the Mollie module's vendored Composer CA bundle
+
+**Spec ref:** §6.4 item 2 and item 4 (TLS interception; the "SDK pins certificates"
+escape hatch).
+
+**Decision:** After `composer install` produces the module's `vendor/` tree, the kit appends
+`images/prestashop/e2e-ca/e2e-ca.crt` to `vendor/composer/ca-bundle/res/cacert.pem` in the
+build output that gets mounted into the shop container. The OS trust store keeps getting the
+CA too (Phase 1 behaviour, unchanged) — it is what PrestaShop core, Guzzle and plain `curl`
+consult; the appended bundle is what the Mollie module consults.
+
+**Why:** §6.4 assumes the only trust decision is the system one. The Mollie module ships its
+own HTTP adapter which sets `CURLOPT_CAINFO` to `CaBundle::getBundledCaBundlePath()` on every
+request (`src/Adapter/API/CurlPSMollieHttpAdapter.php:98`). A per-handle `CURLOPT_CAINFO`
+overrides `curl.cainfo`/`openssl.cafile` and bypasses the OS store entirely, so the Phase 1
+mechanism has no effect on Mollie API traffic — the handshake fails, the adapter retries six
+times and throws `CurlConnectTimeoutException`. §6.4 item 4's prescribed fallback ("a
+provider-sanctioned test endpoint") does not apply, because the pinning is in the module rather
+than the SDK and there is no endpoint setting to repoint without editing module config.
+
+Appending to that bundle is the same act as appending to the OS trust store, performed at the
+path this module actually reads. It touches `vendor/`, which is a build artifact generated on
+the runner from `composer.json` — not module source. The Phase 3 DoD ("`git diff` of the module
+source is empty") is satisfied, and `vendor/` is git-ignored by the module anyway. It is also
+provider-agnostic in the way that matters: the kit exposes it as a declarative
+`module.trustBundles` list of paths within the built module, so a future module that pins
+elsewhere names its own path instead of needing new kit code.
+
+**Rejected alternatives:** patching the adapter (forbidden — module source); `LD_PRELOAD` or
+iptables-level interception (opaque, platform-specific, and defeats Design principle 1);
+running the mock over plain HTTP (the SDK hardcodes the `https://api.mollie.com` base URL, so
+this needs module config).
+
+**Revisit when:** the module switches to `CaBundle::getSystemCaRootBundlePath()`, or a provider
+appears whose pinning is a compiled-in public key rather than a bundle file — the latter is a
+genuine dead end and would force the §6.4 item 4 fallback.
+
+---
+
+## D-015 — `expectedOrderState` may return `null` to mean "no order should exist"
+
+**Spec ref:** §3.6 (`PspContract.expectedOrderState`), §5.3 (the `checkout-matrix`
+expansion), §6.3.
+
+**Decision:** `expectedOrderState(outcome)` returns `string | null`. `null` asserts that the
+outcome legitimately produced **no** PrestaShop order. `verifyOrderInBackOffice` gains a
+matching `expectedState: string | null` and, for `null`, asserts the cart produced no order
+rather than looking one up. The `checkout-matrix` tail becomes: `paid`/`authorized` →
+verify state; `failed`/`canceled`/`expired`/`pending` → verify per whatever the PSP declares,
+which for Mollie is `null` on every method except banktransfer.
+
+**Why:** §5.3's matrix tail assumes every outcome yields an order to inspect. The Mollie module
+only creates the PrestaShop order once the payment status is *finished* — `completed`, `paid`,
+`shipping`, `authorized`, `paid_backorder` (`src/Utility/MollieStatusUtility.php`); for
+`failed`, `canceled`, `expired` and `open` the webhook returns early and the cart stays a cart
+(`src/Service/TransactionService.php:174`). Asserting "order exists in state Canceled" for those
+outcomes would fail against correct module behaviour, and asserting nothing would leave 9 of the
+12 matrix cells checking nothing at all.
+
+This is not Mollie-specific: "an abandoned payment leaves no order" is normal PSP-module
+behaviour, so it belongs in the contract rather than in a provider workaround. Making it an
+explicit `null` rather than an optional assertion keeps it a *positive* assertion — the suite
+still fails if a stray order appears.
+
+Banktransfer is the exception and needs no special casing: it pre-creates the order at payment
+initiation (`controllers/front/payment.php:126`), so `MolliePsp.expectedOrderState` returns a
+state name when the method under test is banktransfer and `null` otherwise. The contract change
+is what makes expressing that possible.
+
+**Revisit when:** a second payment module is onboarded (Phase 5) — if its outcomes map
+uniformly, check whether `null` is carrying its weight.
+
+---
+
+## D-016 — The Mollie consumer overlay is staged inside the kit, not written into the module clone
+
+**Spec ref:** §5.1 (the consumer file set lives in the module repo), §12 Phase 3.
+
+**Decision:** The exact §5.1 file set — `e2e/e2e.config.ts`, `e2e/psp/MolliePsp.ts`,
+`e2e/specs/**`, `e2e/NOTES.md`, `.github/workflows/e2e.yml` — is authored under
+`e2e-kit/pilots/mollie/`, and the Mollie clone at `/Users/justas/e2e-playbook/mollie-module`
+is treated as strictly read-only module source. The kit's runner composes the two: module
+source from the clone, consumer overlay from `pilots/mollie/`.
+
+**Why:** The repo owner's standing instruction for this pilot is that the Mollie clone is not
+to be written to at all — no commits, no adds, no new files. Staging the overlay in the kit
+honours that while still validating the architecture end to end, because the overlay is a
+drop-in: adopting it for real is `cp -r pilots/mollie/{e2e,.github} <module-repo>/` with no
+edits. The layout is a delivery detail, not a design change.
+
+**Cost, stated plainly:** the one thing this cannot verify is Phase 3's "Mollie repo PRs
+blocked/green on mock matrix" DoD bullet, which needs a PR in the module repo — and which
+already needed Phase 2's reusable workflow to exist. That bullet carries over to Phase 2, as
+the Phase 1 handoff already anticipated.
+
+**Revisit when:** the owner green-lights a branch in a fork of the module repo — then the
+overlay moves verbatim and this entry becomes historical.
+
+---
+
+## D-017 — `PspContract` gains optional capabilities, and shared suites skip what a PSP does not implement
+
+**Spec ref:** §3.6 (the contract), §6.3a (the back-office order-management suite).
+
+**Decision:** Four optional members on `PspContract`: `paymentOptionLabel`,
+`refundFromBackOffice`, `apiCalls`, `expectedRefundState`, plus `forceProviderStatus`. Shared
+suites call them when present and skip — with a stated reason — when not. Everything mandatory in
+§3.6 stays mandatory.
+
+**Why:** §6.3a makes back-office order management a *shared* suite, but four of its six scenarios
+need knowledge no platform adapter can have: which control refunds an order in this module's own
+BO panel, what the module's request to the provider should look like, and which state a settled
+refund lands in. The alternatives were both worse than an optional member: putting that knowledge
+in the kit would be exactly the provider-specific code §3.6 exists to prevent, and dropping the
+scenarios would lose the assertions §6.3a asks for by name.
+
+`paymentOptionLabel` is the same shape of problem one level down. `CheckoutPage.selectPaymentModule`
+assumed a module contributes exactly one payment option; most payment modules contribute one per
+method, and the label is not derivable from the method id — Mollie labels `creditcard` as "Card".
+
+**Why optional rather than required:** a non-payment module implements none of this, and a payment
+module without a BO refund widget should not have to stub one. "Skipped, because the PSP does not
+implement `refundFromBackOffice`" is honest; a stub that silently passes is not.
+
+**Revisit when:** the second payment module is onboarded (Phase 5). If it implements all of them,
+they are not really optional and should move into the required surface.
+
+---
+
+## D-018 — `testOrder.createOrder` drives the browser; §6.3a's <5s target is not met
+
+**Spec ref:** §6.3a ("performs cart creation + payment initiation through the shop's HTTP
+endpoints without a full browser session where possible … Target: <5s per order").
+
+**Decision:** `createOrder`/`createPaidOrder` produce a real order in the requested state by
+driving the same browser checkout as `viaCheckout` and delegating the provider legs to the PSP.
+The guarantee §6.3a states — "a real order in the requested state" — holds. The performance
+target does not: an order costs roughly 8–14s, not <5s.
+
+**Why:** the fast path §6.3a imagines needs cart creation and payment initiation over plain HTTP.
+In PrestaShop the cart is bound to a front-office session and the module's payment controller
+resolves the cart from that session, so a session-less client would have to reimplement
+PrestaShop's checkout handshake inside the kit — a large piece of platform-version-specific code
+whose failure mode is silently producing orders that differ from real ones. That is a poor trade
+against saving a few seconds per test in a suite whose slowest step is a container.
+
+**What this costs:** the back-office suite is ~1 minute slower than the spec envisaged. Nothing
+else changes.
+
+**Revisit when:** the BO suite grows past ~10 scenarios, or CI wall-clock becomes the binding
+constraint. The cheapest real speed-up is probably a platform-side PHP order factory invoked
+through `ShopCli`, which keeps the session problem inside PrestaShop where it belongs.
+
+---
+
+## D-019 — Shop-mutating setup runs once per run, coordinated on disk
+
+**Spec ref:** §3.6 ("`setup` … called once before the suite"), §7.2 (every test must pass in
+isolation and under `--fully-parallel`).
+
+**Decision:** Module installation and `psp.setup` run exactly once per run, coordinated across
+Playwright worker processes by `runOnce` (`packages/core/src/env/once.ts`) using an atomic `mkdir`
+lock and a result marker in the consumer's `.e2e-kit/`. Both are exposed as worker fixtures, so
+every suite gets an installed, configured module without depending on the `install` suite having
+run first.
+
+**Why:** the obvious implementation — a worker-scoped fixture — runs N times in parallel against
+one shared shop. Concurrent `cache:clear` breaks the cache for every worker, concurrent module
+installs corrupt the module's tables, and the resulting failures point everywhere except at the
+cause. §3.6's "once before the suite" is a per-run statement, and the per-worker reading was the
+deviation.
+
+Worker processes cannot share memory, so the coordination has to be on disk. `mkdir` is atomic
+everywhere we run, which makes it a lock with no new dependency. Failures are recorded in the
+marker as well as successes, so the other workers fail fast with the original error instead of
+each waiting out the full timeout.
+
+**Revisit when:** a suite legitimately needs per-worker isolated shop state — at which point the
+answer is probably a shop per worker, not a smarter lock.
+
+---
+
+## D-020 — The Mollie module needed no test selectors added
+
+**Spec ref:** §7.1 item 3 ("when a locator heals repeatedly, the durable fix is adding a
+`data-testid` to the module/theme template — we control those codebases").
+
+**Decision:** No `data-testid` attributes were added to the Mollie module, and none are needed for
+the pilot. The back-office panel already ships stable ids, and `MolliePsp` uses those:
+`#mollie-refund-amount`, `#mollie-initiate-refund`, `#mollieRefundModal`,
+`#mollieRefundModalConfirm`, `.mollie-order-info-panel` — all from
+`views/templates/hook/order_info.tpl` and bound in `views/js/admin/order_info.js`.
+
+**Why this is worth recording:** the module's own Cypress suite drives the same panel through
+styled-components class hashes (`.sc-htpNat`, `.sc-bxivhb` in `cypress/support/commands.js`).
+Those are build output — a dependency bump regenerates them — and copying them was the original
+mistake here: the first `refundFromBackOffice` was written from that suite and matched nothing,
+which then got misdiagnosed as "the panel does not render". Reading the module's own template
+instead produced selectors that are both stable and readable.
+
+The offer to add selectors stands for cases where a control genuinely has no stable hook. So far
+the module has one everywhere the pilot needs.
+
+**Revisit when:** a locator here fails on a module upgrade — at which point adding a `data-testid`
+upstream is the right fix under §7.1, not a cleverer selector.
+
+---
+
+## D-021 — Provider attempt key and platform order reference are distinct, everywhere
+
+**Spec ref:** §3.6 (`ensureWebhookProcessed(orderReference)`), §7.4 ("order references are captured
+from the confirmation page").
+
+**Decision:** Two identifiers travel through the suites, and they are never interchangeable:
+
+- `HostedCheckoutResult.reference` — the **provider's** handle on the attempt, passed to
+  `ensureWebhookProcessed` and to the mock's control plane. For Mollie this is the module's
+  generated `mol_<hash>` order number.
+- `TestOrderRef.reference` — the **platform's** order reference, read from the confirmation page
+  once the order exists, and the only thing a back-office lookup accepts.
+
+`TestOrderRef.providerPaymentId` carries the first alongside the second, so a suite that needs both
+has both.
+
+**Why:** the module sends Mollie a placeholder at payment-creation time, because no PrestaShop
+order exists yet, and PrestaShop assigns the real 9-letter reference only when the webhook creates
+the order. Conflating them is a silent, expensive mistake: passing `mol_…` to a back-office search
+fails 15 seconds later as "no order row found", which reads like a missing order rather than a
+wrong key. It cost most of a debugging session and produced a confidently wrong diagnosis
+("the module's panel does not render") before the actual cause surfaced.
+
+**Revisit when:** never, ideally — but if a future PSP's provider key *is* the platform reference,
+resist collapsing the two. The distinction is what makes the failure mode impossible.
+
+---
+
+## D-022 — The mock answers unknown endpoints in Mollie's error shape
+
+**Spec ref:** §6.4 (mock endpoint list, "extend as the module requires").
+
+**Decision:** `setNotFoundHandler` returns Mollie's `{status,title,detail}` envelope and records
+the call with `unimplemented: true`, so `GET /__admin/requests` names any endpoint the module
+needs that the mock lacks.
+
+**Why:** Fastify's default 404 body has an `error` key, and the module's adapter reads
+`$body->error->message` whenever one is present
+(`src/Adapter/API/CurlPSMollieHttpAdapter.php:222`). On a Fastify 404 that resolves to `null`, so
+a missing endpoint surfaced inside PrestaShop as an `ApiException` with an **empty message** — no
+method, no path, nothing. The endpoint in question was `PATCH /v2/payments/:id`, which the module
+uses to replace its placeholder description with the real order reference, and which it calls
+*outside* a try/catch in the refund path — so the whole refund flow failed with
+`"Failed to handle webhook"` and no indication of why.
+
+**Revisit when:** onboarding the next provider mock — this handler is worth copying before writing
+a single endpoint, because it turns "something is missing" into "this exact call is missing".

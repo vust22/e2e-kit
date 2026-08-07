@@ -1,0 +1,14 @@
+{
+  "name": "@invertus/e2e-pilot-mollie",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Consumer overlay for the Mollie PrestaShop module (spec §6). Staged in the kit per DECISIONS.md D-016; drops into the module repo unchanged.",
+  "type": "module",
+  "scripts": {
+    "e2e": "e2e-kit test"
+  },
+  "dependencies": {
+    "@invertus/e2e-core": "0.1.0",
+    "@invertus/e2e-prestashop": "0.1.0"
+  }
+}

@@ -1,0 +1,24 @@
+# File #1 of the "2-file adoption" (spec §5.1, §5.2).
+#
+# The whole CI integration for a consumer repo. Everything it does — booting the seeded image,
+# building the module, running the matrix, publishing the report — lives in the kit's reusable
+# workflow, so a kit release upgrades every consumer at once (Goal 1).
+#
+# NOTE: `e2e-reusable.yml` is Phase 2 work and does not exist yet, so this stub is not runnable
+# today. It is committed now because it is part of the file set Phase 3 has to prove is
+# sufficient, and reviewing it alongside the config is the point.
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [master, main]
+  schedule:
+    - cron: '0 3 * * *'
+
+jobs:
+  e2e:
+    uses: invertus/e2e-kit/.github/workflows/e2e-reusable.yml@v1
+    with:
+      config-path: e2e/e2e.config.ts
+    secrets: inherit
