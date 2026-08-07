@@ -1,5 +1,14 @@
 # @invertus/e2e-prestashop
 
+## 0.2.6
+
+### Patch Changes
+
+- f0ff83d: Anchor Playwright's report and output paths on the invocation directory so CI collects them wherever the
+  config lives. See DECISIONS.md D-035.
+- Updated dependencies [f0ff83d]
+  - @invertus/e2e-core@0.2.6
+
 ## 0.2.5
 
 ### Patch Changes
