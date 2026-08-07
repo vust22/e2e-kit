@@ -6,14 +6,17 @@ not derivable from the code.
 
 Last updated: 2026-08-07, end of a Phase 2 implementation pass.
 
-> **Read this first.** Phase 2's CI is **pushed and green** on `vust22/e2e-kit`: `images`, `release`,
-> `kit-ci` and `e2e-selftest` all pass, both packages are published at `0.2.0`, and the matched image
-> set is in GHCR. Four defects that only CI could surface were found and fixed — see D-028.
+> **Read this first. Phase 2 is complete, including its DoD.**
 >
-> **One thing is still waiting on you:** the Mollie fork overlay is committed locally with its push
-> remote disabled, and pushing it is what closes Phase 2's DoD. Until then the **cross-repository path
-> is unproven** (D-027), and `e2e-reusable.yml` carries three kit-only compile steps that exist purely
-> because the selftest is not a real consumer.
+> `vust22/mollie#1` — a real consumer repository — runs the kit's reusable workflow green:
+> **31 passed, 3 skipped on both PrestaShop 8 and 9**, matching the local run exactly. Verified by
+> downloading the report artifact and counting specs, not by reading the check mark (D-035).
+>
+> Getting there took **nine consumer-only defects**, none of which the kit's own CI could see
+> (D-028 item 4, D-029 … D-035). Two were concealed by D-016's read-only-clone workaround; one produced
+> a **green pipeline over an empty report**. Read D-035 first if you read only one.
+>
+> **Nothing is blocked.** The open items are choices, listed under "What the repo owner needs to do".
 
 ---
 
@@ -21,22 +24,23 @@ Last updated: 2026-08-07, end of a Phase 2 implementation pass.
 
 - **Spec:** `/Users/justas/Downloads/e2e-platform-spec.md` (v1.1.0-draft). It is the single
   source of truth; the repo implements it. Read §0 before starting a phase.
-- **Deviations:** `DECISIONS.md`, entries D-001 … D-028. Add a new entry for any further
-  deviation rather than silently diverging. D-014 … D-022 are Phase 3; D-023 … D-028 are Phase 2.
+- **Deviations:** `DECISIONS.md`, entries D-001 … D-035. Add a new entry for any further
+  deviation rather than silently diverging. D-014 … D-022 are Phase 3; D-023 … D-035 are Phase 2, and
+  D-028 … D-035 are the nine consumer-only defects the fork PR exposed.
 - **Verified module facts:** `pilots/mollie/e2e/NOTES.md` — resolves the §6.1 agent note, and is
   the first thing to read before touching anything Mollie-shaped.
 - **Conventions:** `CONTRIBUTING.md` (mirror of spec §7).
 
 ## State as of this handoff
 
-**Phases 1, 2 and 3 (mock mode) are green.** Phase 2's CI has run for real on GitHub; its DoD is still
-open only because the cross-repository proof needs the Mollie fork PR.
+**Phases 1, 2 and 3 (mock mode) are complete and green**, in the kit's own CI *and* in a real consumer
+repository. Sandbox mode is the only remaining gap before Phase 4.
 
 | Phase | State |
 |---|---|
 | 1 — kit skeleton, packages, seeded PS 8/9 images, compose, CLI | done, 8/8 green on both PS 8 and PS 9 |
-| 2 — CI, publishing, onboarding | **green on GitHub.** `images`, `release`, `kit-ci`, `e2e-selftest` all pass; `@vust22/e2e-{core,prestashop}@0.2.0` published; image set `f24a28e` in GHCR; tags `v0.2.0` / `v1`. **Not DoD-complete** — cross-repo proof missing (D-027) |
-| 3 — Mollie pilot | mock mode complete and green on PS 8 + PS 9 (31/31, re-verified 2026-08-07); sandbox not yet run; fork overlay staged locally, unpushed |
+| 2 — CI, publishing, onboarding | **complete and DoD-satisfied.** All five workflows green; `@vust22/e2e-{core,prestashop}@0.2.6` published; matched image set in GHCR; `v1` floats correctly (D-029). Proven end to end by a real consumer repo (D-016, D-027) |
+| 3 — Mollie pilot | mock mode green locally **and in the fork's CI** (31 passed / 3 skipped on both versions). Sandbox still not run — the only Phase 3 gap left |
 | 4 — self-healing | export surface only; `healingReporter` **throws if enabled**. See "Phase 4 notes" below — the spec's model and `temperature` need updating |
 | 5 — second module onboarding | not started |
 
@@ -45,8 +49,8 @@ open only because the cross-repository proof needs the Mollie fork PR.
 `origin` is `https://github.com/vust22/e2e-kit.git` (HTTPS, via the `gh` credential helper — see the
 SSH note below). The repo is **public**. Default branch `main`.
 
-Everything is pushed. Phase 3's work, the design docs, `ci-matrix`, the release tooling, the five
-workflows, and the four CI fixes from D-028.
+Everything is pushed: Phase 3's work, the design docs, `ci-matrix`, the release tooling, the five
+workflows, and the nine consumer-only fixes (D-028 item 4, D-029 … D-035).
 
 **Why the remote is HTTPS, not SSH.** `ssh -T git@github.com` authenticates as **`justelis22`**, not
 `vust22`, and `justelis22` has no write access to `vust22/e2e-kit` — while the repo was private this
@@ -62,14 +66,16 @@ gh auth refresh -h github.com -s workflow,write:packages,read:packages
 An SSH key registered to `vust22` would also work (SSH pushes are not scope-limited).
 
 The Mollie module clone at `/Users/justas/e2e-playbook/mollie-module` remains **read-only by standing
-instruction** and was not touched. A separate clone of the fork now exists at
-`/Users/justas/e2e-playbook/mollie-fork` with the overlay committed on `e2e-kit-adoption` and its
-**push remote set to `DISABLED`** as a guard.
+instruction** and was never written to. The fork is cloned at `/Users/justas/e2e-playbook/mollie-fork`
+with `e2e-kit-adoption` pushed and PR #1 open and green. **Push to the `mollie/PrestaShop` upstream
+remote is set to `DISABLED`** in that clone — a deliberate guard, since a stray `git push upstream`
+would target Mollie's real repository. Leave it that way.
 
-**Published.** GHCR holds the matched set `f24a28e` — `e2e-ps:8-f24a28e`, `e2e-ps:9-f24a28e`,
-`e2e-mock-mollie:f24a28e`, each with a moving `-main` alias. GitHub Packages holds
-`@vust22/e2e-core@0.2.0` and `@vust22/e2e-prestashop@0.2.0`. All are **public**, inherited automatically
-from the public repo — the explicit visibility PATCH the plan called for turned out to be unnecessary.
+**Published.** GHCR holds the matched image set (`e2e-ps:8-<sha>`, `e2e-ps:9-<sha>`,
+`e2e-mock-mollie:<sha>`, each with a moving `-main` alias). GitHub Packages holds
+`@vust22/e2e-core@0.2.6` and `@vust22/e2e-prestashop@0.2.6`, version-locked. All are **public**,
+inherited automatically from the public repo — the explicit visibility PATCH the plan called for turned
+out to be unnecessary. Tags: `v0.2.0` … `v0.2.6` plus the floating `v1`.
 
 Local tags (`e2e-ps:8`, `e2e-ps:9`, `e2e-mock-mollie:latest`) and workspace file links are unchanged, so
 the daily loop works exactly as before — CI pulls from GHCR by setting `E2E_PS_IMAGE`, it does not
@@ -79,49 +85,48 @@ change the local default.
 
 ## What the repo owner needs to do
 
-**Only step 1 is outstanding.** Everything else already ran.
+**Nothing is blocked.** Everything below is a choice.
 
-**1. Push the Mollie overlay and open its PR** — the last Phase 3 carry-over bullet, and the only thing
-that closes the cross-repository gap D-027 records:
+**1. Review and decide on `vust22/mollie#1`.** It is green and open. I did not merge it — merging makes
+`e2e.yml` run on every push to the fork's `master` plus nightly, which is a standing-cost decision, and
+setting branch protection is outward-facing. If you want both:
 
 ```bash
-cd /Users/justas/e2e-playbook/mollie-fork
-git remote set-url --push origin https://github.com/vust22/mollie.git   # lift the guard
-git push -u origin e2e-kit-adoption
-gh pr create --repo vust22/mollie --base master \
-  --title "test(e2e): adopt the Invertus E2E kit" \
-  --body "Adopts the kit via the 2-file integration. Fires e2e-reusable.yml@v1 on the mock matrix."
+gh pr merge 1 --repo vust22/mollie --squash
+# then protect master requiring: e2e-mock (ps-8), e2e-mock (ps-9) — and NOT the sandbox jobs (§8.3)
 ```
 
-Then protect `master` requiring `e2e-mock (ps-8)` and `e2e-mock (ps-9)` — and **not** the sandbox jobs
-(§8.3).
+**2. Read D-035, then D-031.** D-035 is a run that reported green over an empty report — the only defect
+of the nine that failed *silently*. D-031 is the one D-016's workaround hid: `prepare-module` never
+worked with the documented default `source: '.'`, and 31 local tests on two platform versions all passed
+against a configuration no consumer could have.
 
-**Expected result:** `31 passed, 3 skipped` on both platform versions, matching the local run exactly.
-Any divergence is a real finding about the cross-repo path, not noise. One thing to watch: the fork's
-`package.json` pins `^0.1.0` for the two alias devDeps while the published version is now **0.2.0**. The
-caret resolves it, but confirm the install actually picks 0.2.0.
+**3. Optional: a CommonJS build.** The kit is ESM-only, so it works in a CJS consumer only because the
+CLI writes `{"type":"module"}` markers into `.e2e-kit/` and the consumer's `e2e/` (D-034). A dual build
+with a `require` condition would remove that trick. Note `e2eCaPath()` uses `import.meta.url`, which has
+no CJS equivalent — that needs reworking first.
 
-**2. Then delete the selftest seam.** `e2e-reusable.yml` carries three `Compile the workspace (kit repo
-only)` steps guarded on `github.repository`. They exist solely because `npx e2e-kit` resolves through the
-npm workspace inside the kit; a real consumer resolves it to the installed package, which ships a
-prebuilt `dist`. Once the fork PR is green those steps are dead weight, and removing them is the signal
-that the cross-repo path is genuinely proven (D-028 item 4).
+**4. Phase 3's remaining gap: sandbox mode has still never run.** Needs a sandbox-aware matrix path
+(`MolliePsp` cannot resolve an attempt key from a real Mollie checkout URL, and outcomes that create no
+order have no `platformCartId` to scope assertions to), plus `MOLLIE_TEST_API_KEY` as a secret on the
+fork and cloudflared proven in CI. Start with the `paid` outcome only.
 
-**Already done — no action needed:**
+**Note:** `MOLLIE_TEST_API_KEY` is **not** needed for the mock matrix and adding it changes nothing
+there — the sandbox job is gated to `schedule` and default-branch pushes, and §11 requires mock jobs to
+run with zero provider secrets.
 
-- `images` green — matched set `f24a28e` in GHCR, all three images sharing the suffix (D-026).
-- `release` green — both packages published at `0.2.0`, version-locked; tags `v0.2.0` and `v1` exist.
-- `kit-ci` green — example module 8/8 on PS 8 (3m54s) and PS 9 (5m37s). **PS 9 runs in 5–6 min on a
-  native-amd64 runner versus 13.2 min under local emulation** — worth knowing before optimising anything
-  based on local timings.
-- `e2e-selftest` green — the whole §8.1 graph: `prepare` → `e2e-mock` (8 and 9) → `e2e-sandbox` correctly
-  skipped (the example module declares no `psp`) → `report` → `heal` correctly skipped. The report zip was
-  downloaded and verified: both platform versions merged into one view, 8/8 each, no duplicates.
+**Already done, no action needed:**
 
-**One repo setting was changed on your behalf.** "Allow GitHub Actions to create and approve pull
-requests" was off, which made `release` fail with `GitHub Actions is not permitted to create or approve
-pull requests` — it is the documented requirement for `changesets/action`. It is now on. That is a real,
-if small, permission broadening; review it if you would rather create release PRs by hand.
+- All five workflows green on `vust22/e2e-kit`; packages at `0.2.6`; matched image set in GHCR; `v1`
+  floating correctly and moving on every main build (D-029).
+- The Mollie fork adopted through the real path: two files added, two lines of `package.json`, a lockfile
+  entry, and `.gitignore` additions for `.e2e-kit/` and `e2e/package.json`. **Zero module-source files
+  touched.**
+- `docs/ONBOARDING.md` reflects everything learned, including the `read:packages` PAT for local installs
+  and the generated-config behaviour.
+- Two settings changed on your behalf, both noted where relevant: "Allow GitHub Actions to create and
+  approve pull requests" on `e2e-kit` (required by `changesets/action`), and push to the
+  `mollie/PrestaShop` upstream remote **disabled** in the local fork clone as a safety guard.
 
 ## Environment gotchas on this machine
 
