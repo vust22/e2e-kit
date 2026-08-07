@@ -785,3 +785,43 @@ acceptance gate rather than a nice-to-have.
 **Consequence:** the §5.1 "2-file adoption" is unchanged in file count — the permissions block lives
 inside the stub that was already file #1. A consumer forbidden from elevating the token can drop
 `pull-requests: write` and lose only the summary comment; the matrix and the report zip are unaffected.
+
+---
+
+## D-031 — `prepare-module` could never have worked in a real consumer repo, and D-016 is why nobody knew
+
+**Spec ref:** §5.3 (`module.source` defaults to `'.'`), §8.2 (module build runs on the runner).
+
+**The bug:** `prepareModule` copied `module.source` into `.e2e-kit/module-build/<name>` with a single
+`cpSync(source, target, { recursive: true, filter })`. When `module.source` is `'.'` — **the normal
+case, and the documented default** — the target is inside the source, and Node rejects that with
+`ERR_FS_CP_EINVAL`, "cannot copy to a subdirectory of self". The `filter` that excludes `.e2e-kit` never
+runs: the ancestor check is structural and happens before any directory walk.
+
+So the command failed **immediately and always** for any consumer using the default `source: '.'`.
+
+**Fixed** by copying each top-level entry separately (`copyModuleTree`), which means no individual
+source path is an ancestor of the target once `.e2e-kit` is skipped. Three unit tests cover it,
+including the nested-target case that reproduces the failure.
+
+**Why it stayed hidden through the entire Phase 3 pilot — the part worth learning from.** D-016 made the
+Mollie clone read-only and pointed `module.source` at it via `MOLLIE_MODULE_SOURCE`, so source and
+target were always *unrelated trees* and the ancestor check never triggered. Every one of the 31 green
+tests, on both platform versions, on every local run, exercised a configuration **no real consumer
+would ever have**. The workaround adopted to protect the module checkout silently replaced the primary
+code path with a secondary one, and then validated the secondary one thoroughly.
+
+The `?? '.'` fallback in `pilots/mollie/e2e/e2e.config.ts` looked like it covered the real case. It did
+not: with the env var set, the fallback is dead code, and nothing ever ran the branch a consumer takes.
+
+**The generalisable lesson:** a test-environment workaround that changes which code path runs is not a
+neutral convenience — it is an untested-path generator, and the more thoroughly the suite passes, the
+more confidence it misplaces. When a workaround like this is unavoidable, the mitigation is to exercise
+the real path at least once somewhere, deliberately, and to treat the workaround as an open item rather
+than a settled decision. D-016 recorded its cost as "cannot verify the Mollie repo PR bullet". The
+actual cost was larger and different: **a defect in the main path of the module build.**
+
+**Consequence for D-027:** this makes four distinct consumer-facing defects that only a real consumer
+repository could surface (with D-028 item 4, D-029, D-030), and this one is the most serious — the
+others broke CI, this one broke the product. Any future "we can prove it from inside the kit" claim
+should be read against that record.

@@ -1,5 +1,6 @@
 export {
   prepareModule,
+  copyModuleTree,
   patchTrustBundles,
   resolveModuleSourceDir,
   preparedModuleDir,

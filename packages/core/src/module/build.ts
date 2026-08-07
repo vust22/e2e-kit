@@ -1,4 +1,13 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, appendFileSync, statSync } from 'node:fs';
+import {
+  appendFileSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+} from 'node:fs';
 import path from 'node:path';
 import { runOrThrow } from '../env/process.js';
 import type { E2EConfig } from '../config/schema.js';
@@ -61,6 +70,40 @@ export function resolveModuleSourceDir(cwd: string, config: E2EConfig): string {
   return path.resolve(cwd, config.module.source);
 }
 
+/** Directories never worth copying into the build tree or the bind mount. */
+const EXCLUDED_TOP_LEVEL = new Set(['.git', 'node_modules', '.e2e-kit']);
+
+/**
+ * Copy a module checkout into the build tree, **entry by entry rather than in one call**.
+ *
+ * The obvious implementation — a single `cpSync(source, target, { recursive: true, filter })` —
+ * cannot work when `module.source` is `'.'`, which is the normal case for a real consumer repo
+ * (spec §5.3). The target is then `<source>/.e2e-kit/module-build/<name>`, i.e. *inside* the source,
+ * and Node rejects that with `ERR_FS_CP_EINVAL` ("cannot copy to a subdirectory of self"). That check
+ * is structural — it compares the two paths before walking anything — so the `filter` that excludes
+ * `.e2e-kit` never gets a chance to run.
+ *
+ * Copying each top-level entry separately avoids it: no individual source entry is an ancestor of the
+ * target once `.e2e-kit` is skipped.
+ *
+ * This was invisible for the whole Mollie pilot because `MOLLIE_MODULE_SOURCE` pointed at a separate
+ * read-only clone (DECISIONS.md D-016), making source and target unrelated trees. It surfaced the first
+ * time the kit ran in an actual consumer repository — see D-031.
+ */
+export function copyModuleTree(source: string, target: string): void {
+  mkdirSync(target, { recursive: true });
+
+  for (const entry of readdirSync(source)) {
+    if (EXCLUDED_TOP_LEVEL.has(entry)) continue;
+    cpSync(path.join(source, entry), path.join(target, entry), {
+      recursive: true,
+      dereference: true,
+      // Still needed for nested occurrences — a module may vendor its own node_modules deeper in.
+      filter: (src) => !EXCLUDED_TOP_LEVEL.has(path.basename(src)),
+    });
+  }
+}
+
 export async function prepareModule(opts: PrepareModuleOptions): Promise<PreparedModule> {
   const { cwd, config } = opts;
   const log = opts.onProgress ?? (() => undefined);
@@ -83,16 +126,7 @@ export async function prepareModule(opts: PrepareModuleOptions): Promise<Prepare
   mkdirSync(path.dirname(target), { recursive: true });
 
   log(`copying ${source} -> ${target}`);
-  cpSync(source, target, {
-    recursive: true,
-    dereference: true,
-    filter: (src) => {
-      const base = path.basename(src);
-      // `.git` would bloat the copy and the bind mount for no benefit; the build outputs are
-      // regenerated anyway.
-      return base !== '.git' && base !== 'node_modules' && base !== '.e2e-kit';
-    },
-  });
+  copyModuleTree(source, target);
 
   if (config.module.build) {
     log(`running module build: ${config.module.build}`);
