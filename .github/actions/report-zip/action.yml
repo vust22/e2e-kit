@@ -37,12 +37,32 @@ runs:
         blobs=(${{ inputs.blob-glob }})
         mkdir -p merged-report
         if [ ${#blobs[@]} -eq 0 ]; then
-          echo "::warning title=No reports::no blob reports found for mode=${{ inputs.mode }}"
+          echo "::warning title=No reports::no blob report directories found for mode=${{ inputs.mode }}"
           echo '{"suites":[]}' > merged-report/summary.json
           exit 0
         fi
+
+        # `merge-reports` wants the report zips DIRECTLY in one directory — it does not recurse into
+        # per-artifact subdirectories, which is what `download-artifact` with a `pattern` produces.
+        #
+        # Flattening needs a prefix, not a plain copy: every shard's artifact contains a file named
+        # `report.zip`, so copying them side by side would silently overwrite all but one and yield a
+        # report showing a fraction of the tests as though the run were complete.
         mkdir -p all-blobs
-        cp -r "${blobs[@]}" all-blobs/
+        for dir in "${blobs[@]}"; do
+          for zip in "$dir"/*.zip; do
+            cp "$zip" "all-blobs/$(basename "$dir")-$(basename "$zip")"
+          done
+        done
+
+        count=$(ls -1 all-blobs/*.zip 2>/dev/null | wc -l | tr -d ' ')
+        echo "merging $count blob report(s) from ${#blobs[@]} artifact directory(ies)"
+        if [ "$count" -eq 0 ]; then
+          echo "::warning title=No reports::artifact directories contained no report zips"
+          echo '{"suites":[]}' > merged-report/summary.json
+          exit 0
+        fi
+
         # `merge-reports` writes the HTML report to ./playwright-report and the JSON to stdout.
         npx playwright merge-reports --reporter html,json all-blobs > summary.json
         mv playwright-report/* merged-report/ 2>/dev/null || true
