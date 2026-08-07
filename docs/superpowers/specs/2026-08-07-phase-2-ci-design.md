@@ -104,7 +104,7 @@ it, so a shop image can never be paired with a mock from a different CA. Pinning
 `image-set: <sha7>`.
 
 **No kit code changes are needed for this.** `E2E_PS_IMAGE` and `E2E_MOLLIE_MOCK_IMAGE` are already
-env-overridable (`packages/core/bin/e2e-kit.js:116`, `compose/docker-compose.mock.yml:25`), and
+env-overridable (`packages/core/bin/e2e-kit.js:116`, `packages/core/compose/docker-compose.mock.yml:25`), and
 `platform.imageOverride` already exists in the config schema.
 
 Builds run natively on amd64 on `ubuntu-latest` — no emulation, unlike the laptop (D-003).

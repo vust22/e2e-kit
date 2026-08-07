@@ -894,3 +894,42 @@ reason as everywhere else (D-003).
 image was built from — so the module ends up trusting exactly the CA the shop container trusts, which is
 the property D-014 needs. A non-kit image (`alpine:3`) fails with a `ModuleBuildError` naming the image
 and the path.
+
+---
+
+## D-033 — Runtime assets resolve from the package root; `compose/` moved into `packages/core/`
+
+**Spec ref:** §3.1 (repo layout), §5.5 (the CLI), §8.2.
+
+**The bug.** The CLI computed `repoRoot = path.resolve(here, '..', '..', '..')` from
+`packages/core/bin/` and read the compose files from `<repoRoot>/compose`. In the kit that resolves to
+the repository root and is correct. In a consumer the CLI lives at
+`node_modules/@invertus/e2e-core/bin/`, so the same expression yields `node_modules/` and the command
+became:
+
+```
+docker compose -f /home/runner/work/mollie/mollie/node_modules/compose/docker-compose.yml up -d
+```
+
+Compounding it, `compose/` sat at the repository root and was **not in the package's `files`**, so the
+published tarball never contained the compose files at all. `up` could not work in any consumer.
+
+**Decision:** `compose/` now lives at `packages/core/compose/` and is listed in the package's `files`.
+The CLI resolves it from a new `packageRoot = path.resolve(here, '..')` — `packages/core` in the kit,
+`node_modules/@invertus/e2e-core` in a consumer. `repoRoot` survives for kit-development commands only
+(`build-image`), with a comment saying so.
+
+**Why move the directory rather than resolve two locations:** the E2E CA needs a two-source lookup
+because it is *generated* and cannot be shipped (D-032). Compose files are static assets, so a single
+canonical location inside the package removes the whole question. The move cost two documentation
+references, and the compose files themselves are location-independent — verified before moving: no build
+contexts, no volumes, no relative host paths.
+
+**The general rule this establishes:** anything the CLI reads at runtime must live under
+`packages/core/` and appear in `files`. A path built from an assumed repository root is a bug, because a
+consumer has the published package and nothing else. That single assumption produced this defect and
+D-032's shallow half.
+
+**Consequence:** this is the **sixth** consumer-only defect (D-028 item 4, D-029, D-030, D-031, D-032,
+D-033), and the fourth traceable to the kit-vs-consumer environment difference that `e2e-selftest.yml`
+cannot see — inside the kit, the repo root genuinely is three levels up.

@@ -69,8 +69,24 @@ function has(name) {
 }
 
 const cwd = process.cwd();
+
+/**
+ * Root of the installed `@invertus/e2e-core` package — `packages/core` in this repo,
+ * `node_modules/@invertus/e2e-core` in a consumer.
+ *
+ * Everything the CLI needs at runtime must be resolved from here and listed in the package's `files`,
+ * because a consumer has the published package and nothing else. Resolving from a presumed *repo root*
+ * instead is what produced `node_modules/compose/docker-compose.yml` in the first real consumer run
+ * (DECISIONS.md D-033).
+ */
+const packageRoot = path.resolve(here, '..');
+const composeDir = path.join(packageRoot, 'compose');
+
+/**
+ * Repo root — only valid when running from a checkout of the kit itself. Used exclusively by
+ * kit-development commands (`build-image`), never by anything a consumer runs.
+ */
 const repoRoot = path.resolve(here, '..', '..', '..');
-const composeDir = path.join(repoRoot, 'compose');
 
 function fail(message) {
   console.error(`\x1b[1;31m[e2e-kit]\x1b[0m ${message}`);
@@ -138,7 +154,7 @@ async function cmdUp() {
     info(`Module prepared at ${path.relative(cwd, prepared.sourceDir)}`);
   }
 
-  let stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: repoRoot, env });
+  let stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: packageRoot, env });
 
   info(`Booting ${image} as project '${projectName}' in ${mode} mode on port ${port}`);
   const started = Date.now();
@@ -158,7 +174,7 @@ async function cmdUp() {
 
     env.E2E_PUBLIC_HOST = publicUrl.replace(/^https?:\/\//, '');
     env.E2E_PUBLIC_URL = publicUrl;
-    stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: repoRoot, env });
+    stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: packageRoot, env });
   }
 
   await stack.up({ inherit: true });
@@ -275,7 +291,7 @@ async function cmdDown() {
   const stack = new ComposeStack({
     projectName: state.projectName,
     files: state.composeFiles,
-    cwd: repoRoot,
+    cwd: packageRoot,
     env: { E2E_PLATFORM: process.env.E2E_PLATFORM ?? 'linux/amd64' },
   });
   info(`Tearing down '${state.projectName}'`);

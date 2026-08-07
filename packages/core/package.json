@@ -32,7 +32,8 @@
   },
   "files": [
     "dist",
-    "bin"
+    "bin",
+    "compose"
   ],
   "scripts": {
     "build": "tsc --build",
