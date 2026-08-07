@@ -992,9 +992,22 @@ the `overrides` escape hatch survives.
 **Verified** with six unit tests plus a live run: with the pilot's own config hidden, the generated one
 loaded and ran `3 passed` against a running stack, and the ESM marker was written as intended.
 
+**Correction: option 1 as first recommended was incomplete.** Marking `.e2e-kit/` as ESM only governs
+files *inside* `.e2e-kit/`. The generated config then loaded fine, and the run failed one level deeper at
+`e2e/e2e.config.ts:1:1` via `loadCJSModule` — because the consumer's own `e2e/` files (the config, the
+PSP implementation, every spec) all import the kit too, and Playwright loads each according to *its*
+nearest package.json. The reasoning that produced the first recommendation stopped at the file the kit
+writes and did not follow the import graph into the files the consumer writes.
+
+The fix therefore also writes `{"type":"module"}` into the **consumer's config directory** (`e2e/`) when
+no package.json is already there. That is safe because `e2e/` holds only kit-related files by
+construction (§5.1), and a package.json carrying just `type` affects module format only — Node still
+walks up for `node_modules`. An existing package.json is never overwritten.
+
 **Option 2 is still worth doing later** — publishing a CJS build and adding a `require` condition would
-make the package usable from hand-written CJS configs too. It is no longer a prerequisite, because
-nothing in the default path requires a CJS entry point now.
+remove the need for either marker and let any CJS consumer import the kit directly from anywhere. It is
+no longer a prerequisite. Note it is not a trivial change: `e2eCaPath()` uses `import.meta.url`, which
+has no CommonJS equivalent, so a dual build needs that reworked first.
 
 **Consequence:** `.e2e-kit/` must be gitignored in a consumer repo, which ONBOARDING.md now states. The
 generated file carries a `GENERATED — do not edit, and do not commit` header.

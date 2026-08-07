@@ -1,4 +1,4 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { MODULE_BUILD_DIR } from '../module/build.js';
 
@@ -62,6 +62,21 @@ export function synthesizePlaywrightConfig(opts: {
     `${JSON.stringify({ type: 'module' }, null, 2)}\n`,
     'utf8',
   );
+
+  // The `.e2e-kit/` marker above only governs files inside `.e2e-kit/`. The consumer's own
+  // `e2e/e2e.config.ts`, `e2e/psp/*.ts` and `e2e/specs/*.spec.ts` all import the kit as well, and
+  // Playwright loads each of them according to the nearest package.json — the consumer's, which may be
+  // CommonJS. So the directory holding those files needs the same marker.
+  //
+  // This is safe because `e2e/` contains only kit-related files by construction (spec §5.1), and a
+  // package.json with just a `type` affects module format only — Node still walks up for node_modules.
+  // Never overwrite an existing one: that would be the consumer's own file.
+  const configDir = path.dirname(path.resolve(opts.configPath));
+  const consumerMarker = path.join(configDir, 'package.json');
+  // Only if the directory is really there — the kit does not create the consumer's own directories.
+  if (existsSync(configDir) && !existsSync(consumerMarker)) {
+    writeFileSync(consumerMarker, `${JSON.stringify({ type: 'module' }, null, 2)}\n`, 'utf8');
+  }
 
   const specDir = resolveSpecDir(opts.cwd, opts.config, opts.configPath);
   const configFile = path.join(dir, 'playwright.config.ts');

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -76,6 +76,36 @@ test('is idempotent — regenerating overwrites without appending', () => {
     const first = readFileSync(synthesizePlaywrightConfig(args), 'utf8');
     const second = readFileSync(synthesizePlaywrightConfig(args), 'utf8');
     assert.equal(first, second);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('marks the consumer config directory ESM too, since its files also import the kit', () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'e2e-synth-'));
+  const configPath = path.join(cwd, 'e2e', 'e2e.config.ts');
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    synthesizePlaywrightConfig({ cwd, config: { suites: {} }, configPath });
+    const marker = path.join(cwd, 'e2e', 'package.json');
+    assert.ok(existsSync(marker), 'the consumer config dir needs an ESM marker as well');
+    assert.equal(JSON.parse(readFileSync(marker, 'utf8')).type, 'module');
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('never overwrites a package.json the consumer already has', () => {
+  const cwd = mkdtempSync(path.join(os.tmpdir(), 'e2e-synth-'));
+  const configPath = path.join(cwd, 'e2e', 'e2e.config.ts');
+  try {
+    mkdirSync(path.dirname(configPath), { recursive: true });
+    const marker = path.join(cwd, 'e2e', 'package.json');
+    writeFileSync(marker, JSON.stringify({ name: 'mine', type: 'commonjs' }));
+    synthesizePlaywrightConfig({ cwd, config: { suites: {} }, configPath });
+    const kept = JSON.parse(readFileSync(marker, 'utf8'));
+    assert.equal(kept.name, 'mine', "the consumer's own package.json must be left alone");
+    assert.equal(kept.type, 'commonjs');
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
