@@ -122,8 +122,8 @@ generated config.
 ```json
 {
   "devDependencies": {
-    "@invertus/e2e-core": "npm:@vust22/e2e-core@^0.1.0",
-    "@invertus/e2e-prestashop": "npm:@vust22/e2e-prestashop@^0.1.0"
+    "@invertus/e2e-core": "npm:@vust22/e2e-core@^0.2.0",
+    "@invertus/e2e-prestashop": "npm:@vust22/e2e-prestashop@^0.2.0"
   }
 }
 ```
