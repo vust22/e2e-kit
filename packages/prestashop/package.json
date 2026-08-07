@@ -1,6 +1,6 @@
 {
   "name": "@invertus/e2e-prestashop",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "PrestaShop platform adapter for the Invertus E2E kit: page objects, shared flows, seed dataset",
   "license": "UNLICENSED",
   "type": "module",
@@ -39,7 +39,7 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@invertus/e2e-core": "0.2.1"
+    "@invertus/e2e-core": "0.2.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
