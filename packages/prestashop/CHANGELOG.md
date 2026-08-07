@@ -1,5 +1,14 @@
 # @invertus/e2e-prestashop
 
+## 0.2.5
+
+### Patch Changes
+
+- abb7a9a: Also mark the consumer's `e2e/` directory as ESM, so the config, PSP implementation and specs load in a
+  CommonJS repository. See DECISIONS.md D-034.
+- Updated dependencies [abb7a9a]
+  - @invertus/e2e-core@0.2.5
+
 ## 0.2.4
 
 ### Patch Changes
