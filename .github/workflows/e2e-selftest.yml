@@ -1,0 +1,24 @@
+# Prove e2e-reusable.yml works by calling it (DECISIONS.md D-024).
+#
+# The spec's Phase 2 DoD wants the example module adopted "in a scratch repo". That would need a third
+# repository, and the stronger proof — the Mollie fork — is outside the current authorization
+# boundary. This caller exercises the real reusable workflow through a real `uses:` invocation:
+# matrix expansion, package install, published image pull, blob merge, zip and summary.
+#
+# What it does NOT prove: that the workflow works ACROSS a repository boundary, where the token, the
+# package read and the image pull are all cross-repo. That gap is tracked in docs/HANDOFF.md and is
+# the first thing to close once the fork PR is authorized.
+name: e2e-selftest
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * *'
+
+jobs:
+  e2e:
+    uses: ./.github/workflows/e2e-reusable.yml
+    with:
+      config-path: examples/consumer-module/e2e/e2e.config.ts
+      image-set: main
+    secrets: inherit

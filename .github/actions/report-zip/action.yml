@@ -1,0 +1,97 @@
+# Merge every shard's blob report into one HTML report, bundle it with the summary and container
+# logs, and upload it as a single zip (DECISIONS.md D-020).
+#
+# A zip rather than gh-pages because the reusable workflow runs under the *consumer's* GITHUB_TOKEN
+# and has no write access anywhere else, and because artifacts behave the same on private repos and
+# the Free plan — so nothing about the report path changes when this moves to a real org.
+name: report-zip
+description: Merge Playwright blob reports and upload a single report zip
+
+inputs:
+  mode:
+    description: >
+      mock | sandbox — kept separate because the Playwright project name encodes the platform version
+      but not the mode, so merging the two would make a chromium-ps8 shard from each
+      indistinguishable.
+    required: true
+  blob-glob:
+    description: Path glob of downloaded blob-report directories
+    required: true
+  artifact-name:
+    description: Name of the uploaded artifact
+    required: true
+
+outputs:
+  summary-markdown:
+    description: Inline PR-comment table
+    value: ${{ steps.summarise.outputs.markdown }}
+
+runs:
+  using: composite
+  steps:
+    - name: Merge blob reports
+      shell: bash
+      run: |
+        set -euo pipefail
+        shopt -s nullglob
+        blobs=(${{ inputs.blob-glob }})
+        mkdir -p merged-report
+        if [ ${#blobs[@]} -eq 0 ]; then
+          echo "::warning title=No reports::no blob reports found for mode=${{ inputs.mode }}"
+          echo '{"suites":[]}' > merged-report/summary.json
+          exit 0
+        fi
+        mkdir -p all-blobs
+        cp -r "${blobs[@]}" all-blobs/
+        # `merge-reports` writes the HTML report to ./playwright-report and the JSON to stdout.
+        npx playwright merge-reports --reporter html,json all-blobs > summary.json
+        mv playwright-report/* merged-report/ 2>/dev/null || true
+        mv summary.json merged-report/summary.json
+
+    - id: summarise
+      shell: bash
+      run: |
+        set -euo pipefail
+        md=$(node -e '
+          const fs = require("fs");
+          let j;
+          try { j = JSON.parse(fs.readFileSync("merged-report/summary.json", "utf8")); }
+          catch { console.log("_no report produced_"); process.exit(0); }
+          const specs = (j.suites ?? []).flatMap(function walk(s) {
+            return [...(s.specs ?? []), ...(s.suites ?? []).flatMap(walk)];
+          });
+          const rows = {};
+          for (const spec of specs) {
+            for (const t of spec.tests ?? []) {
+              const p = t.projectName || "unknown";
+              rows[p] ??= { passed: 0, failed: 0, skipped: 0 };
+              const s = t.status === "expected" ? "passed" : t.status === "skipped" ? "skipped" : "failed";
+              rows[p][s]++;
+            }
+          }
+          if (Object.keys(rows).length === 0) { console.log("_no tests reported_"); process.exit(0); }
+          const lines = ["| project | passed | failed | skipped |", "|---|---:|---:|---:|"];
+          for (const [p, r] of Object.entries(rows)) {
+            lines.push("| `" + p + "` | " + r.passed + " | " + r.failed + " | " + r.skipped + " |");
+          }
+          console.log(lines.join("\n"));
+        ')
+        {
+          echo 'markdown<<REPORT_EOF'
+          echo "$md"
+          echo 'REPORT_EOF'
+        } >> "$GITHUB_OUTPUT"
+        {
+          echo "### E2E — ${{ inputs.mode }}"
+          echo
+          echo "$md"
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          merged-report
+          logs
+        retention-days: 30
+        if-no-files-found: warn

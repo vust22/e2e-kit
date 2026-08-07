@@ -1,0 +1,61 @@
+# Versioning and publishing (spec §10).
+#
+# Push to main -> changesets maintains a "Version Packages" PR. Merging that PR publishes.
+#
+# Packages publish as `@vust22/*` because GitHub Packages requires the scope to match the repository
+# owner, but every source import in this repo stays `@invertus/*`. scripts/prepare-publish.mjs does
+# that remap on a staged copy at publish time (DECISIONS.md D-022) — nothing in `src` knows about it.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+  pull-requests: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://npm.pkg.github.com'
+
+      - run: npm ci
+      - run: npx tsc --build
+      - run: npm run test:unit
+
+      # Opens or updates the "Version Packages" PR while changesets are pending; once that PR merges
+      # and no changesets remain, `publish` runs instead.
+      - id: changesets
+        uses: changesets/action@v1
+        with:
+          version: npx changeset version
+          publish: node scripts/publish-all.mjs
+          commit: 'chore(release): version packages'
+          title: 'chore(release): version packages'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # §10: consumers pin `@v1`, a floating major tag moved on each release.
+      - name: Move the floating v1 tag
+        if: steps.changesets.outputs.published == 'true'
+        run: |
+          set -euo pipefail
+          git tag -f v1
+          git push -f origin v1

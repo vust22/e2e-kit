@@ -1,0 +1,98 @@
+# Publish the seeded platform images and the provider mock as a MATCHED SET.
+#
+# One job, deliberately — not a per-image matrix. DECISIONS.md D-009 generates the E2E CA per build,
+# and the mock's `api.mollie.com` leaf certificate is signed by that same CA. Two jobs would produce
+# two CAs, and TLS interception inside the compose network would fail with an unknown-issuer error
+# that looks like anything but a build problem. The CA, all three images, and the push happen here or
+# they are not consistent.
+#
+# `scripts/build-image.mjs` regenerates the CA and rebuilds every mock on every invocation, so one
+# `--all` call is exactly one consistent set. Every image therefore shares one tag suffix, and
+# consumers resolve all three from a single `image-set` value (see e2e-reusable.yml).
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'images/**'
+      - 'packages/prestashop/src/seed/**'
+      - 'scripts/build-image.mjs'
+      - 'scripts/gen-ca.mjs'
+      - '.github/workflows/images.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  OWNER: ${{ github.repository_owner }}
+  E2E_PLATFORM: linux/amd64
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      image-set: ${{ steps.tags.outputs.suffix }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # The seed manifest is generated from packages/prestashop/src/seed/dataset.ts. build-image.mjs
+      # compiles the adapter itself, but building here first fails fast on a type error rather than
+      # part-way through a 3-minute docker build.
+      - run: npx tsc --build
+
+      - id: tags
+        run: echo "suffix=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Builds the CA, both platform images and the provider mock in one invocation (D-009).
+      - name: Build the matched image set
+        run: node scripts/build-image.mjs --all
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Tag and push
+        env:
+          SUFFIX: ${{ steps.tags.outputs.suffix }}
+        run: |
+          set -euo pipefail
+          push() {
+            local local_tag="$1" remote_base="$2" immutable="$3" floating="$4"
+            docker tag "$local_tag" "$REGISTRY/$OWNER/$remote_base:$immutable"
+            docker tag "$local_tag" "$REGISTRY/$OWNER/$remote_base:$floating"
+            docker push "$REGISTRY/$OWNER/$remote_base:$immutable"
+            docker push "$REGISTRY/$OWNER/$remote_base:$floating"
+          }
+          push e2e-ps:8               e2e-ps          "8-$SUFFIX" "8-main"
+          push e2e-ps:9               e2e-ps          "9-$SUFFIX" "9-main"
+          push e2e-mock-mollie:latest e2e-mock-mollie "$SUFFIX"   "main"
+
+      - name: Summarise the set
+        env:
+          SUFFIX: ${{ steps.tags.outputs.suffix }}
+        run: |
+          {
+            echo "### Image set \`$SUFFIX\`"
+            echo
+            echo "Resolve all three from one \`image-set\` value; never mix suffixes (D-009)."
+            echo '```'
+            echo "$REGISTRY/$OWNER/e2e-ps:8-$SUFFIX"
+            echo "$REGISTRY/$OWNER/e2e-ps:9-$SUFFIX"
+            echo "$REGISTRY/$OWNER/e2e-mock-mollie:$SUFFIX"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

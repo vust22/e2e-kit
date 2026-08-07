@@ -1,0 +1,119 @@
+# The kit cannot merge a change that breaks its own flows (spec §10).
+#
+# Images are built FROM THE PR'S SOURCE rather than pulled from GHCR: a PR touching images/** has to
+# be tested as changed, and pulling `:main` would test the previous build instead.
+name: kit-ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  E2E_PLATFORM: linux/amd64
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+
+  e2e:
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        ps: ['8', '9']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --build
+      - run: npx playwright install --with-deps chromium
+
+      # Same builder a developer runs; builds the CA, the platform image and the mock together
+      # in one invocation, which is what keeps them a matched set (D-009).
+      - run: node scripts/build-image.mjs --ps ${{ matrix.ps }}
+
+      - name: Boot the stack
+        working-directory: examples/consumer-module
+        run: node ../../packages/core/bin/e2e-kit.js up --ps ${{ matrix.ps }} --mode mock
+
+      - name: Run the suite
+        working-directory: examples/consumer-module
+        run: node ../../packages/core/bin/e2e-kit.js test
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          mkdir -p logs
+          docker ps -a --format '{{.Names}}' | while read -r n; do
+            docker logs "$n" > "logs/ps${{ matrix.ps }}-${n}.log" 2>&1 || true
+          done
+
+      - name: Tear down
+        if: always()
+        working-directory: examples/consumer-module
+        run: node ../../packages/core/bin/e2e-kit.js down || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kit-ci-blob-ps${{ matrix.ps }}
+          path: examples/consumer-module/blob-report
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: kit-ci-logs-ps${{ matrix.ps }}
+          path: logs
+          if-no-files-found: ignore
+
+  report:
+    needs: e2e
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'kit-ci-blob-*'
+          path: downloaded
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: 'kit-ci-logs-*'
+          path: logs
+      - uses: ./.github/actions/report-zip
+        with:
+          mode: mock
+          blob-glob: downloaded/kit-ci-blob-*
+          artifact-name: kit-ci-report-${{ github.run_id }}

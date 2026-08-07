@@ -1,0 +1,314 @@
+# The one workflow every consumer repo calls (spec §5.2, §8.1).
+#
+# Job graph:
+#   prepare -> e2e-mock (ps x shard, BLOCKING on PRs)
+#           -> e2e-sandbox (ps, main/nightly only, never blocking)
+#           -> report (always)
+#           -> heal (Phase 4 stub)
+#
+# Every job runs the same `e2e-kit` commands a developer runs locally. That identity is the whole
+# point of the CLI (Goal 7): anything CI does differently must be an argument to one of those
+# commands, never a separate script.
+name: e2e-reusable
+
+on:
+  workflow_call:
+    inputs:
+      config-path:
+        description: Path to the consumer's e2e.config.ts
+        required: true
+        type: string
+      image-set:
+        description: >
+          Tag suffix identifying a MATCHED image set. All three images resolve from this one value
+          because the shop image and the provider mock share a per-build CA (D-009) — mixing suffixes
+          fails TLS interception with an unknown-issuer error.
+        required: false
+        default: main
+        type: string
+      kit-owner:
+        description: Owner of the published image set. Change once, on the move to the real org.
+        required: false
+        default: vust22
+        type: string
+
+permissions:
+  contents: read
+  packages: read
+  pull-requests: write
+
+env:
+  E2E_PLATFORM: linux/amd64
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mock: ${{ steps.matrix.outputs.mock }}
+      sandbox: ${{ steps.matrix.outputs.sandbox }}
+      sandbox-enabled: ${{ steps.matrix.outputs.sandbox-enabled }}
+      module-name: ${{ steps.matrix.outputs.module-name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://npm.pkg.github.com'
+
+      # GitHub Packages authenticates even public reads, so the kit writes the auth itself via
+      # NODE_AUTH_TOKEN. This is what keeps the consumer at the 2-file adoption (spec §5.1) — no auth
+      # plumbing in the consumer repo.
+      - name: Install the kit
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm ci
+
+      - id: matrix
+        run: |
+          set -euo pipefail
+          json=$(npx e2e-kit ci-matrix --config "${{ inputs.config-path }}")
+          echo "$json" | python3 -m json.tool
+          emit() {
+            echo "$1=$(echo "$json" | python3 -c "import json,sys; print(json.dumps(json.load(sys.stdin)[\"$2\"]))")" >> "$GITHUB_OUTPUT"
+          }
+          emit mock mock
+          emit sandbox sandbox
+          echo "sandbox-enabled=$(echo "$json" | python3 -c 'import json,sys; print(str(json.load(sys.stdin)["sandboxEnabled"]).lower())')" >> "$GITHUB_OUTPUT"
+          echo "module-name=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["moduleName"])')" >> "$GITHUB_OUTPUT"
+
+  e2e-mock:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.mock) }}
+    # Spec §11: mock jobs run with ZERO provider secrets present. This job deliberately declares no
+    # provider env of any kind — the enforcement is structural, not a runtime check.
+    env:
+      E2E_PS_IMAGE: ghcr.io/${{ inputs.kit-owner }}/e2e-ps:${{ matrix.ps }}-${{ inputs.image-set }}
+      E2E_MOLLIE_MOCK_IMAGE: ghcr.io/${{ inputs.kit-owner }}/e2e-mock-mollie:${{ inputs.image-set }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: 'https://npm.pkg.github.com'
+      - name: Install the kit
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm ci
+      - run: npx playwright install --with-deps chromium
+
+      - name: Build the module
+        run: npx e2e-kit prepare-module --config "${{ inputs.config-path }}"
+
+      - name: Boot the stack
+        id: boot
+        run: |
+          set -euo pipefail
+          start=$SECONDS
+          npx e2e-kit up --ps ${{ matrix.ps }} --mode mock --reuse-module \
+            --config "${{ inputs.config-path }}"
+          echo "seconds=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
+
+      # §8.2 asks for a 90s boot budget with a distinct ENV_BOOT_FAILED annotation. Taken literally
+      # that fails an otherwise-green run for being 5s slow. The annotation exists so §9.1 healing
+      # never fires on environment problems, so a genuine boot FAILURE earns it (the step above exits
+      # non-zero); merely exceeding the budget warns. DECISIONS.md D-021.
+      - name: Boot budget
+        if: steps.boot.outcome == 'success'
+        run: |
+          s=${{ steps.boot.outputs.seconds }}
+          if [ "$s" -gt 90 ]; then
+            echo "::warning title=Boot over budget::boot took ${s}s (§8.2 budget is 90s)"
+          fi
+
+      - name: Annotate a boot failure
+        if: failure() && steps.boot.outcome == 'failure'
+        run: |
+          echo "::error title=ENV_BOOT_FAILED::the stack did not become healthy; this is an environment failure, not a test failure"
+          exit 1
+
+      - name: Run the shard
+        run: npx e2e-kit test --shard ${{ matrix.shard }} --config "${{ inputs.config-path }}"
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          mkdir -p logs
+          docker ps -a --format '{{.Names}}' | while read -r n; do
+            docker logs "$n" > "logs/mock-ps${{ matrix.ps }}-shard${{ matrix.shardIndex }}-${n}.log" 2>&1 || true
+          done
+
+      # `down` reads the recorded stack state rather than the config, so it takes no --config.
+      - name: Tear down
+        if: always()
+        run: npx e2e-kit down || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-blob-mock-ps${{ matrix.ps }}-${{ matrix.shardIndex }}
+          path: '**/blob-report'
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-logs-mock-ps${{ matrix.ps }}-${{ matrix.shardIndex }}
+          path: logs
+          if-no-files-found: ignore
+
+  e2e-sandbox:
+    needs: prepare
+    # §8.3: sandbox posts status but never blocks a PR. It runs on main and on the nightly schedule
+    # the consumer's own stub declares.
+    if: >
+      needs.prepare.outputs.sandbox-enabled == 'true' &&
+      (github.event_name == 'schedule' ||
+       (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.sandbox) }}
+    env:
+      E2E_PS_IMAGE: ghcr.io/${{ inputs.kit-owner }}/e2e-ps:${{ matrix.ps }}-${{ inputs.image-set }}
+      # The only job that receives provider credentials (§11).
+      MOLLIE_TEST_API_KEY: ${{ secrets.MOLLIE_TEST_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Skip with an annotation when the required secret is absent
+        id: guard
+        run: |
+          if [ -z "${MOLLIE_TEST_API_KEY:-}" ]; then
+            echo "::warning title=Sandbox skipped::the required provider secret is not configured on this repository"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.guard.outputs.skip == 'false'
+        with:
+          node-version: 22
+          registry-url: 'https://npm.pkg.github.com'
+
+      - name: Install the kit
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npm ci
+
+      - if: steps.guard.outputs.skip == 'false'
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the module
+        if: steps.guard.outputs.skip == 'false'
+        run: npx e2e-kit prepare-module --config "${{ inputs.config-path }}"
+
+      - name: Boot and run
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          npx e2e-kit up --ps ${{ matrix.ps }} --mode sandbox --reuse-module \
+            --config "${{ inputs.config-path }}"
+          npx e2e-kit test --config "${{ inputs.config-path }}"
+
+      - name: Tear down
+        if: always() && steps.guard.outputs.skip == 'false'
+        run: npx e2e-kit down || true
+
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.guard.outputs.skip == 'false'
+        with:
+          name: e2e-blob-sandbox-ps${{ matrix.ps }}
+          path: '**/blob-report'
+          if-no-files-found: warn
+
+  report:
+    needs: [e2e-mock, e2e-sandbox]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The composite action lives in the kit, so the kit is what gets checked out here — the caller's
+      # own tree is irrelevant to merging reports.
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.kit-owner }}/e2e-kit
+          ref: v1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: 'e2e-blob-mock-*'
+          path: downloaded-mock
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: 'e2e-logs-*'
+          path: logs
+
+      - id: mock-report
+        uses: ./.github/actions/report-zip
+        with:
+          mode: mock
+          blob-glob: downloaded-mock/e2e-blob-mock-*
+          artifact-name: e2e-report-mock-${{ github.run_id }}
+
+      # The PR comment carries the full table INLINE so ordinary triage needs no download — that is
+      # what pays for giving up a clickable gh-pages link (D-020).
+      - name: Comment on the PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          TABLE: ${{ steps.mock-report.outputs.summary-markdown }}
+        with:
+          script: |
+            const marker = '## E2E — mock matrix';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              marker,
+              '',
+              process.env.TABLE || '_no report produced_',
+              '',
+              `Full report: download **e2e-report-mock-${context.runId}** from [this run](${runUrl}), unzip, then \`npx playwright show-report merged-report\`.`,
+              '',
+              '_Reports are 30-day artifacts rather than a hosted page (DECISIONS.md D-020)._',
+            ].join('\n');
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number: context.issue.number,
+            });
+            const mine = comments.find((c) => c.body?.startsWith(marker));
+            if (mine) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: mine.id, body });
+            } else {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  heal:
+    needs: report
+    # Phase 4 (spec §9). The job exists so the graph matches §8.1 and so enabling healing is a
+    # one-line change rather than a new job. `healingReporter` still throws if enabled today.
+    if: false
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Self-healing is Phase 4; healingReporter throws if enabled today."
