@@ -43,19 +43,25 @@ runs:
         fi
 
         # `merge-reports` wants the report zips DIRECTLY in one directory — it does not recurse into
-        # per-artifact subdirectories, which is what `download-artifact` with a `pattern` produces.
+        # the per-artifact subdirectories that `download-artifact` with a `pattern` produces.
         #
-        # Flattening needs a prefix, not a plain copy: every shard's artifact contains a file named
-        # `report.zip`, so copying them side by side would silently overwrite all but one and yield a
-        # report showing a fraction of the tests as though the run were complete.
+        # Search at ANY depth rather than one level down: how deep the zips sit inside an artifact
+        # depends on what the upload's `path` rooted at, which has bitten this twice.
+        #
+        # And flattening needs a unique prefix, not a plain copy: shards produce identically named
+        # files (`report.zip`, or `report-1.zip` from every shard), so copying them side by side would
+        # silently overwrite all but one and yield a report showing a fraction of the tests as though
+        # the run were complete.
         mkdir -p all-blobs
+        n=0
         for dir in "${blobs[@]}"; do
-          for zip in "$dir"/*.zip; do
-            cp "$zip" "all-blobs/$(basename "$dir")-$(basename "$zip")"
-          done
+          while IFS= read -r zip; do
+            n=$((n + 1))
+            cp "$zip" "all-blobs/$(basename "$dir")-$n-$(basename "$zip")"
+          done < <(find "$dir" -type f -name '*.zip' | sort)
         done
 
-        count=$(ls -1 all-blobs/*.zip 2>/dev/null | wc -l | tr -d ' ')
+        count=$(find all-blobs -maxdepth 1 -type f -name '*.zip' | wc -l | tr -d ' ')
         echo "merging $count blob report(s) from ${#blobs[@]} artifact directory(ies)"
         if [ "$count" -eq 0 ]; then
           echo "::warning title=No reports::artifact directories contained no report zips"
