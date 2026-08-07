@@ -114,6 +114,11 @@ CLI. `.github/workflows/` is deliberately empty until Phase 2.
 get sign-off before anything touches shared infrastructure. The spec's Phase 1 DoD is
 itself stated in terms of a local run.
 
+**Superseded by Phase 2 (2026-08-07).** `.github/` now holds `images.yml`, `release.yml`, `kit-ci.yml`,
+`e2e-reusable.yml` and `e2e-selftest.yml`; images publish to `ghcr.io/vust22` (D-026) and packages to
+GitHub Packages (D-025). The remote names moved from `invertus` to `vust22` for the dry run — see D-025
+for how that reverses. Local tags and `--local` remain the CLI default, so the daily loop is unchanged.
+
 ---
 
 ## D-007 — Playwright pinned to 1.62.1
@@ -351,6 +356,23 @@ the Phase 1 handoff already anticipated.
 **Revisit when:** the owner green-lights a branch in a fork of the module repo — then the
 overlay moves verbatim and this entry becomes historical.
 
+**Partially resolved (2026-08-07).** The fork `vust22/mollie` exists and the overlay has been copied
+into it verbatim and committed on a local branch `e2e-kit-adoption` at
+`/Users/justas/e2e-playbook/mollie-fork`, whose **push remote is deliberately set to `DISABLED`** — the
+authorization for that session covered `vust22/e2e-kit` only. The copy confirmed the drop-in claim: it
+added exactly `e2e/` and `.github/workflows/e2e.yml` and changed nothing else, and the only edits needed
+were the `uses:` owner and two alias devDependencies (D-025).
+
+One imprecision in the original entry, worth recording: `e2e/e2e.config.ts` is
+`source: process.env.MOLLIE_MODULE_SOURCE ?? '.'`, not a literal `source: '.'`. It works unchanged in a
+real module repo because the fallback resolves correctly, but it does carry one line of kit-side
+scaffolding a real consumer would not want. It was left byte-identical rather than cleaned, because
+"the overlay is a verbatim drop-in" is the property this entry claims and diverging the two copies
+would defeat the test.
+
+**Still open** until that branch is pushed and its PR runs green — the last Phase 3 carry-over bullet
+("Mollie repo PRs blocked/green on mock matrix"), and the cross-repository gap D-027 records.
+
 ---
 
 ## D-017 — `PspContract` gains optional capabilities, and shared suites skip what a PSP does not implement
@@ -508,3 +530,147 @@ uses to replace its placeholder description with the real order reference, and w
 
 **Revisit when:** onboarding the next provider mock — this handler is worth copying before writing
 a single endpoint, because it turns "something is missing" into "this exact call is missing".
+
+---
+
+## D-023 — Run reports are downloadable zip artifacts, not gh-pages
+
+**Spec ref:** §8.1 ("report ... publish HTML to gh-pages `/e2e/<run-id>/`, PR comment with summary +
+link").
+
+**Decision:** The `report` job merges every shard's blob report, bundles the HTML report,
+`summary.json`, `junit.xml` and any captured container logs, and uploads one zip per mode
+(`e2e-report-mock-<run_id>`, `e2e-report-sandbox-<run_id>`). No `gh-pages` branch is created and
+GitHub Pages is not enabled anywhere. The PR comment carries the full per-project pass/fail/skip table
+**inline** instead of a link.
+
+**Why:** the reusable workflow runs under the *consumer's* `GITHUB_TOKEN`, so the only gh-pages it
+could write to is the consumer's own — and the pilot consumer is a fork of someone else's public
+repository, where pushing a `gh-pages` branch is invasive. Artifacts also behave identically on private
+repositories and on the Free plan, whereas Pages requires a paid plan for private repos; that means the
+report path does not have to change when the kit moves to its permanent org. It also shrinks the
+workflow's permissions to `pull-requests: write`, with no `contents: write` on the caller.
+
+**Consequence, stated plainly:** a Playwright HTML report cannot be opened from `file://`, so a
+reviewer downloads, unzips and runs `npx playwright show-report merged-report` — one step more than
+clicking a link. The inline PR table is what keeps that cost off ordinary triage: only trace-level
+debugging needs the download. Artifacts expire after 30 days (§8.2's own retention figure), so there is
+no long-term report history to compare runs against. Nothing in Phases 2–3 depends on that, and §9.6's
+healing telemetry uses separate JSON-line artifacts.
+
+**Two zips rather than one merged view** because the Playwright project name encodes the platform
+version (`chromium-ps8`) but not the mode, so a mock shard and a sandbox shard of the same version
+would be indistinguishable in one merged report. Splitting also mirrors §8.3's blocking/non-blocking
+split.
+
+**Revisit when:** the kit lives in an org where a shared, permanent report host is available and
+consumers want run history — then this becomes an additional publish target, not a replacement.
+
+---
+
+## D-024 — `ENV_BOOT_FAILED` marks a boot failure; exceeding the boot budget only warns
+
+**Spec ref:** §8.2 ("healthcheck-ready target < 90s. If exceeded, fail fast with a distinct
+`ENV_BOOT_FAILED` annotation so healing never triggers on environment failures").
+
+**Decision:** `e2e-mock` times the boot step. A genuine boot failure or timeout emits
+`::error title=ENV_BOOT_FAILED` and fails the job. Merely exceeding 90s while booting successfully
+emits `::warning title=Boot over budget` and the job continues.
+
+**Why:** read literally, the spec fails an otherwise-green run because boot took 95 seconds. The
+annotation's stated purpose is the clause that follows it — *"so healing never triggers on environment
+failures"* — which is about §9.1 classification, not about enforcing a latency SLO. A boot that
+succeeded is not an environment failure, however slow it was, and marking it as one would suppress
+healing on a run where healing is valid.
+
+**Consequence:** the 90s budget is observable but not enforced. If boot time needs to be a hard gate
+later, it should be a separate explicit check with its own annotation, so the healing classifier keeps
+one unambiguous signal.
+
+---
+
+## D-025 — Packages publish as `@vust22/*` through a publish-time scope remap
+
+**Spec ref:** §10 (npm packages version-locked, consumed via Renovate), §11 (secrets table lists
+`GHCR` access via `GITHUB_TOKEN` and no `NPM_TOKEN`).
+
+**Decision:** the two packages are published to GitHub Packages (`npm.pkg.github.com`) as
+`@vust22/e2e-core` and `@vust22/e2e-prestashop`. Every `package.json` and every one of the 51 source
+files that import them keeps the `@invertus/*` name. `scripts/prepare-publish.mjs` stages each package
+into a temp directory and rewrites exactly two things in the copied manifest:
+
+1. `name` → `@vust22/<base>`
+2. each `@invertus/e2e-*` **runtime** dependency → an npm alias, keeping `@invertus/...` as the key and
+   pointing it at `npm:@vust22/...@<version>`
+
+`scripts/publish-all.mjs` publishes from the staging directories. Consumers declare the same alias
+shape in their own `package.json`.
+
+**Why GitHub Packages at all:** §11's secrets table budgets for `GHCR` access via `GITHUB_TOKEN` and
+lists no `NPM_TOKEN`, so the design already assumed the GitHub registry. GitHub Packages then requires
+the npm scope to match the repository owner, which a `vust22`-owned repo cannot satisfy for
+`@invertus/*`.
+
+**Why remap at publish time rather than rename in the repo:** the 51 importing files resolve through a
+workspace symlink keyed on the package name. Renaming the `name` fields breaks every local import,
+every example, and the pilot — a wide diff that would have to be reverted on the move to the real org.
+
+**Why edit 2 is load-bearing:** the compiled `dist` still contains `import '@invertus/e2e-core'`. A
+published package whose dependency were plainly `@vust22/e2e-core` would install to a path its own code
+never looks at, and would resolve nothing at runtime. The alias installs the published package *at the
+path the compiled imports expect*.
+
+**Consequence:** GitHub Packages authenticates even public reads, so local installs need a
+`read:packages` PAT in `~/.npmrc`. CI does not — the reusable workflow supplies `NODE_AUTH_TOKEN`
+itself, which is what keeps consumers at the §5.1 two-file adoption.
+
+**Revisit when:** the kit moves to its permanent org and can publish `@invertus/*` directly. Deleting
+`scripts/prepare-publish.mjs` and `scripts/publish-all.mjs` and dropping the consumer aliases is the
+entire migration; no source changes.
+
+---
+
+## D-026 — Images publish as matched sets sharing one tag suffix
+
+**Spec ref:** §4.1 item 9, §8.2, and DECISIONS.md D-009.
+
+**Decision:** `images.yml` is a single job that runs `scripts/build-image.mjs --all` once and pushes
+every resulting image under one shared tag suffix (`e2e-ps:8-<sha7>`, `e2e-ps:9-<sha7>`,
+`e2e-mock-mollie:<sha7>`), plus moving `-main` aliases. `e2e-reusable.yml` takes a single `image-set`
+input and derives all three refs from it.
+
+**Why:** D-009 generates the E2E CA per build, and the provider mock serves an `api.mollie.com` leaf
+signed by that same CA. A per-image build matrix would produce two CAs, and the shop container would
+reject the mock's certificate. The failure surfaces as an unknown-issuer error deep inside the module's
+HTTP adapter after a retry storm — which looks like almost anything other than a build-orchestration
+problem. Deriving every ref from one value makes a mismatched pair unrepresentable rather than merely
+discouraged.
+
+**Consequence:** the images cannot be rebuilt independently. A change to the mock alone still
+republishes the platform images, which on native amd64 runners is a few minutes and worth the
+guarantee.
+
+---
+
+## D-027 — The reusable workflow is proven by an in-kit caller, not a consumer repository
+
+**Spec ref:** §12 Phase 2 DoD ("`examples/consumer-module` moved through the real adoption path — 2
+files added, matrix runs green on a PR in a scratch repo").
+
+**Decision:** `e2e-selftest.yml` lives in the kit and calls `e2e-reusable.yml` via
+`uses: ./.github/workflows/e2e-reusable.yml` against `examples/consumer-module`. That is the Phase 2
+evidence for the reusable workflow. No scratch repository is created.
+
+**Why:** the repo owner's authorization on 2026-08-07 covers local work and `vust22/e2e-kit` only —
+explicitly not `vust22/mollie`, which was to have been the stronger proof. `examples/consumer-module`
+lives inside the kit, so satisfying the DoD's "scratch repo" wording literally would require standing
+up a third repository, which the same boundary rules out.
+
+**Consequence, stated plainly:** this proves matrix expansion, package installation, the published image
+pull, blob merging, the report zip and the summary — but **not the cross-repository path**, where the
+token, the package read and the image pull are all cross-repo. **Phase 2 is therefore not DoD-complete.**
+The gap is recorded in `docs/HANDOFF.md` as the first thing to close.
+
+**Revisit when:** the owner green-lights pushing the Mollie fork branch. The overlay is already
+committed locally at `/Users/justas/e2e-playbook/mollie-fork` on `e2e-kit-adoption`; pushing it and
+opening the PR closes both this entry and the last Phase 3 carry-over bullet.

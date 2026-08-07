@@ -1,5 +1,5 @@
 # Merge every shard's blob report into one HTML report, bundle it with the summary and container
-# logs, and upload it as a single zip (DECISIONS.md D-020).
+# logs, and upload it as a single zip (DECISIONS.md D-023).
 #
 # A zip rather than gh-pages because the reusable workflow runs under the *consumer's* GITHUB_TOKEN
 # and has no write access anywhere else, and because artifacts behave the same on private repos and

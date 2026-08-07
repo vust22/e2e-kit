@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Publish every releasable package through the scope remap (DECISIONS.md D-022).
+ * Publish every releasable package through the scope remap (DECISIONS.md D-025).
  *
  * `changesets/action` expects a single publish command, so this wraps the per-package staging: for
  * each package, stage a copy with the remapped manifest, then `npm publish` from the staging

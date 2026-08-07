@@ -118,7 +118,7 @@ jobs:
       # §8.2 asks for a 90s boot budget with a distinct ENV_BOOT_FAILED annotation. Taken literally
       # that fails an otherwise-green run for being 5s slow. The annotation exists so §9.1 healing
       # never fires on environment problems, so a genuine boot FAILURE earns it (the step above exits
-      # non-zero); merely exceeding the budget warns. DECISIONS.md D-021.
+      # non-zero); merely exceeding the budget warns. DECISIONS.md D-024.
       - name: Boot budget
         if: steps.boot.outcome == 'success'
         run: |
@@ -270,7 +270,7 @@ jobs:
           artifact-name: e2e-report-mock-${{ github.run_id }}
 
       # The PR comment carries the full table INLINE so ordinary triage needs no download — that is
-      # what pays for giving up a clickable gh-pages link (D-020).
+      # what pays for giving up a clickable gh-pages link (D-023).
       - name: Comment on the PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@v7
@@ -287,7 +287,7 @@ jobs:
               '',
               `Full report: download **e2e-report-mock-${context.runId}** from [this run](${runUrl}), unzip, then \`npx playwright show-report merged-report\`.`,
               '',
-              '_Reports are 30-day artifacts rather than a hosted page (DECISIONS.md D-020)._',
+              '_Reports are 30-day artifacts rather than a hosted page (DECISIONS.md D-023)._',
             ].join('\n');
             const { data: comments } = await github.rest.issues.listComments({
               ...context.repo,

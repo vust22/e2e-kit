@@ -40,7 +40,7 @@ the `invertus` org.
 | How does the overlay reach the Mollie fork? | **Fresh clone of the fork.** `/Users/justas/e2e-playbook/mollie-module` stays untouched and read-only. The fork is cloned to a new path and `pilots/mollie/{e2e,.github}` is copied in verbatim — the copy itself is the proof that D-016's "drop-in" claim holds. |
 | Kit repo visibility | **Public.** Removes four obstacles at once: Pages availability on the Free plan, reusable-workflow access grants, GHCR pulls with the plain `GITHUB_TOKEN`, and the 2000-minute private-repo Actions quota. |
 | Package distribution | **GitHub Packages under `@vust22/*`, consumed through an npm alias.** Chosen because spec §11's secrets table budgets for `GHCR` access via `GITHUB_TOKEN` and lists **no** `NPM_TOKEN` — the design already assumed GitHub Packages. Costs an `.npmrc` in CI and a `read:packages` PAT for local installs. |
-| Run reporting | **Downloadable zip artifacts, not gh-pages** (deviation from §8.1 — see D-020). |
+| Run reporting | **Downloadable zip artifacts, not gh-pages** (deviation from §8.1 — see D-023). |
 
 ## 3. Prerequisites
 
@@ -198,7 +198,7 @@ one.
 ### 5.1 Zip artifacts, not gh-pages
 
 §8.1 says "publish HTML to gh-pages `/e2e/<run-id>/`". This design ships **zip artifacts** instead
-(D-020). Reasons:
+(D-023). Reasons:
 
 - The reusable workflow runs under the *consumer's* `GITHUB_TOKEN`, so it could only ever write to the
   consumer's gh-pages — and the Mollie consumer is a fork of someone else's public repo, where
@@ -241,7 +241,7 @@ indistinguishable in a single merged report. Keeping them apart avoids a preset 
 §8.2 says exceeding the 90s boot budget should "fail fast with `ENV_BOOT_FAILED`". Read literally that
 fails an otherwise-green run because boot took 95s. The annotation's actual purpose is to stop healing
 from firing on environment problems, so this design emits `ENV_BOOT_FAILED` on a genuine boot failure
-or timeout, and a **non-fatal warning** when merely over budget (D-021).
+or timeout, and a **non-fatal warning** when merely over budget (D-024).
 
 ## 6. Mollie fork adoption — prepared, not pushed
 
@@ -294,13 +294,13 @@ New `DECISIONS.md` entries:
 
 | Entry | Subject |
 |---|---|
-| D-020 | Run reports are downloadable zip artifacts, not gh-pages |
-| D-021 | `ENV_BOOT_FAILED` on genuine boot failure; over-budget boot warns, does not fail |
-| D-022 | The `vust22` dry-run namespace and the publish-time scope remap |
-| D-023 | Images publish as matched sets sharing a tag suffix (the D-009 CA constraint) |
+| D-023 | Run reports are downloadable zip artifacts, not gh-pages |
+| D-024 | `ENV_BOOT_FAILED` on genuine boot failure; over-budget boot warns, does not fail |
+| D-025 | The `vust22` dry-run namespace and the publish-time scope remap |
+| D-026 | Images publish as matched sets sharing a tag suffix (the D-009 CA constraint) |
 | D-006 | amended: superseded by this phase |
 | D-016 | amended: the fork is green-lit and the overlay is staged locally; stays open until the fork PR runs green |
-| D-024 | The reusable workflow is proven by an in-kit caller, because the consumer-repo proof is out of the authorization boundary |
+| D-027 | The reusable workflow is proven by an in-kit caller, because the consumer-repo proof is out of the authorization boundary |
 
 ## 8. Verification — what closes the phase
 
@@ -311,7 +311,7 @@ New `DECISIONS.md` entries:
    `config-path: examples/consumer-module/e2e/e2e.config.ts`. This is a genuine cross-workflow
    `uses:` invocation exercising the real job graph, matrix expansion, `.npmrc` write, published image
    pull, blob merge, zip and PR comment — everything a consumer repo would exercise except living in a
-   different repository (D-024)
+   different repository (D-027)
 5. Report zip downloads and opens under `show-report`; PR comment carries the inline summary
 6. `docs/ONBOARDING.md` documents the §8.3 branch-protection setup (not applied — it belongs on the
    consumer repo)

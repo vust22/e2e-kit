@@ -4,7 +4,7 @@
 #
 # Packages publish as `@vust22/*` because GitHub Packages requires the scope to match the repository
 # owner, but every source import in this repo stays `@invertus/*`. scripts/prepare-publish.mjs does
-# that remap on a staged copy at publish time (DECISIONS.md D-022) — nothing in `src` knows about it.
+# that remap on a staged copy at publish time (DECISIONS.md D-025) — nothing in `src` knows about it.
 name: release
 
 on:

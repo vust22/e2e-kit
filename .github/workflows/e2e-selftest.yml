@@ -1,4 +1,4 @@
-# Prove e2e-reusable.yml works by calling it (DECISIONS.md D-024).
+# Prove e2e-reusable.yml works by calling it (DECISIONS.md D-027).
 #
 # The spec's Phase 2 DoD wants the example module adopted "in a scratch repo". That would need a third
 # repository, and the stronger proof — the Mollie fork — is outside the current authorization

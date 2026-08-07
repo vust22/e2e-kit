@@ -1,0 +1,18 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "packageRules": [
+    {
+      "matchPackageNames": ["@invertus/e2e-core", "@invertus/e2e-prestashop"],
+      "groupName": "e2e-kit",
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "matchPackageNames": ["@invertus/e2e-core", "@invertus/e2e-prestashop"],
+      "groupName": "e2e-kit",
+      "matchUpdateTypes": ["minor", "major"],
+      "automerge": false
+    }
+  ]
+}

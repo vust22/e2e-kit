@@ -4,7 +4,15 @@ Everything a fresh session needs to pick this up. Read `README.md` first for wha
 is; this file is only the things that are true about *this machine and this moment* and are
 not derivable from the code.
 
-Last updated: 2026-08-06, during Phase 3.
+Last updated: 2026-08-07, end of a Phase 2 implementation pass.
+
+> **Read this first: three things are waiting on you.** All three are blocked on authorization or
+> credentials, not on work. See "What the repo owner needs to do" below.
+>
+> 1. The Phase 2 workflows are **committed locally but not pushed** — the `vust22` token lacks the
+>    `workflow` scope and GitHub rejects the push.
+> 2. The Mollie fork overlay is **committed locally with its push remote disabled**.
+> 3. Because of (1), **no workflow has ever run**, so Phase 2 is not verified and not DoD-complete.
 
 ---
 
@@ -20,29 +28,98 @@ Last updated: 2026-08-06, during Phase 3.
 
 ## State as of this handoff
 
-**Phase 1 complete and verified green. Phase 3 is in progress** — see "Phase 3 state" below for
-exactly what is green and what is not.
+**Phase 1 and Phase 3 (mock mode) are complete and verified green. Phase 2 is written but unverified**
+— every workflow exists and is committed, none has ever executed.
 
 | Phase | State |
 |---|---|
 | 1 — kit skeleton, packages, seeded PS 8/9 images, compose, CLI | done, 8/8 green on both PS 8 and PS 9 |
-| 2 — reusable workflow, gh-pages reporting, onboarding doc | not started; `.github/workflows/` is empty |
-| 3 — Mollie pilot | mock mode complete and green on PS 8 + PS 9 (31/31); sandbox not yet run |
-| 4 — self-healing | export surface only; `healingReporter` **throws if enabled** |
+| 2 — CI, publishing, onboarding | **written, committed locally, never run.** Five workflows + composite action + `ci-matrix` command + scope remap + ONBOARDING.md. Push blocked on the `workflow` token scope; **not DoD-complete** (D-027) |
+| 3 — Mollie pilot | mock mode complete and green on PS 8 + PS 9 (31/31, re-verified 2026-08-07); sandbox not yet run; fork overlay staged locally, unpushed |
+| 4 — self-healing | export surface only; `healingReporter` **throws if enabled**. See "Phase 4 notes" below — the spec's model and `temperature` need updating |
 | 5 — second module onboarding | not started |
 
 ### Git
 
-The repo is on `main` with two commits (Phase 1 plus a docs commit). All Phase 3 work is
-**uncommitted** — the repo owner asked not to commit without being asked. Confirm first.
+`origin` is `https://github.com/vust22/e2e-kit.git` (HTTPS, via the `gh` credential helper — see the
+SSH note below). The repo is **public**. Default branch `main`.
 
-The Mollie module clone at `/Users/justas/e2e-playbook/mollie-module` is **read-only by standing
-instruction**: no commits, no adds, no new files, nothing. Everything the consumer repo would gain
-is staged in `e2e-kit/pilots/mollie/` instead (DECISIONS.md D-016), and the clone is bind-copied
-into the container from a prepared build tree, never modified in place.
+**Pushed:** the four commits that landed Phase 3 and the design docs, plus `ci-matrix` and the release
+tooling — seven commits total.
 
-Nothing is published: images build to local tags (`e2e-ps:8`, `e2e-ps:9`), packages are
-file-linked through npm workspaces, no GHCR, no npm registry (DECISIONS.md D-006).
+**Committed but NOT pushed:** one commit, `ci: images, release, kit-ci, reusable job graph and selftest
+workflows`. GitHub rejects it:
+
+```
+! [remote rejected] main -> main (refusing to allow an OAuth App to create or update
+  workflow `.github/workflows/e2e-reusable.yml` without `workflow` scope)
+```
+
+**Why SSH does not work here.** `ssh -T git@github.com` authenticates as **`justelis22`**, not
+`vust22`, and `justelis22` has no write access to `vust22/e2e-kit`. While the repo was private this
+presented as a confusing `ERROR: Repository not found`. The remote is therefore HTTPS, which uses the
+`gh`-stored `vust22` token — and that token is missing the `workflow` scope. An SSH key registered to
+`vust22` would also solve it (SSH pushes are not scope-limited), but adding a credential to your GitHub
+account is not something an autonomous session should do on your behalf.
+
+The Mollie module clone at `/Users/justas/e2e-playbook/mollie-module` remains **read-only by standing
+instruction** and was not touched. A separate clone of the fork now exists at
+`/Users/justas/e2e-playbook/mollie-fork` with the overlay committed on `e2e-kit-adoption` and its
+**push remote set to `DISABLED`** as a guard.
+
+Nothing is published yet: no image has been pushed to GHCR and no package to GitHub Packages, because
+both happen from workflows that cannot be pushed. Local tags (`e2e-ps:8`, `e2e-ps:9`,
+`e2e-mock-mollie:latest`) and workspace file links are unchanged, so the daily loop works exactly as
+before.
+
+---
+
+## What the repo owner needs to do
+
+**1. Grant the token the scopes it needs, then push.** One command, then one push:
+
+```bash
+gh auth refresh -h github.com -s workflow,write:packages,read:packages
+cd /Users/justas/e2e-playbook/e2e-kit
+git push origin main
+```
+
+**2. Run the workflows in this order.** They have dependencies: the reusable workflow pulls published
+images, and the consumer stub pins `@v1`, which does not exist until a release runs.
+
+```bash
+gh workflow run images.yml --repo vust22/e2e-kit      # publishes the matched image set
+# then make both GHCR packages public so a consumer's own token can pull them:
+gh api -X PATCH /user/packages/container/e2e-ps          --field visibility=public
+gh api -X PATCH /user/packages/container/e2e-mock-mollie --field visibility=public
+
+# release.yml runs automatically on the push above and opens a "Version Packages" PR.
+# Merge it — that publishes the packages and moves the floating v1 tag.
+gh pr list --repo vust22/e2e-kit
+
+gh workflow run e2e-selftest.yml --repo vust22/e2e-kit   # proves e2e-reusable.yml end to end
+```
+
+`kit-ci.yml` fires on the next PR by itself. **Expect to iterate** — none of these has ever executed,
+so treat the first runs as debugging, and read a failing job's log before editing the workflow.
+
+**3. Push the Mollie overlay and open its PR** — the last Phase 3 carry-over bullet, and the only thing
+that closes the cross-repository gap in D-027:
+
+```bash
+cd /Users/justas/e2e-playbook/mollie-fork
+git remote set-url --push origin https://github.com/vust22/mollie.git   # re-enable the guard
+git push -u origin e2e-kit-adoption
+gh pr create --repo vust22/mollie --base master \
+  --title "test(e2e): adopt the Invertus E2E kit" \
+  --body "Adopts the kit via the 2-file integration. Fires e2e-reusable.yml@v1 on the mock matrix."
+```
+
+Then protect `master` requiring `e2e-mock (ps-8)` and `e2e-mock (ps-9)` — and **not** the sandbox jobs
+(§8.3).
+
+**Expected result of that PR:** `31 passed, 3 skipped` on both platform versions, matching the local
+run exactly. Any divergence is a real finding about the cross-repo path, not noise.
 
 ## Environment gotchas on this machine
 
@@ -255,6 +332,26 @@ that identity is the whole point of the CLI (Goal 7).
 already consumed by `BasePage.locate`, so candidate validation (spec §9.4) has its hook.
 Override values are **Playwright selector strings**, not JavaScript — deliberately, so the
 harness never evals model output.
+
+**Three corrections to spec §9.3, verified against current Anthropic API documentation on 2026-08-07.**
+Recorded here so Phase 4 does not rediscover them:
+
+1. **`temperature: 0` will not work on any current model.** Sampling parameters were removed from
+   Opus 4.7 onward and are rejected on Sonnet 5 — sending `temperature` returns a 400. It is still
+   accepted on the `claude-sonnet-4-6` the spec names, so the spec is not wrong *today*, but the field
+   must be deleted the moment the model is bumped.
+2. **The spec's manual JSON-schema validation is now partly redundant.** Structured outputs
+   (`output_config.format` with a JSON schema) *guarantee* schema-valid output rather than validating
+   after the fact. They are **not** available on Sonnet 4.6, so pinning that model means keeping the
+   manual validation. The dynamic-id rejection (`/\d{4,}/`) stays either way — it is a semantic check no
+   schema can express.
+3. **`claude-sonnet-4-6` is a generation behind.** Sonnet-tier is the right choice for a mechanical
+   DOM-repair call, but `claude-sonnet-5` is current, supports structured outputs, and would let the
+   call run at `effort: low`.
+
+The healing design itself needs no rethink: it is one constrained API call per failed selector, whose
+output is only ever accepted after the **entire** failed spec re-runs green with the candidate injected.
+The run stays red and a human merges the PR.
 
 ## Working agreement with the repo owner
 

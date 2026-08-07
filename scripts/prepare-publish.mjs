@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Stage a workspace package for publishing under a different npm scope
- * (DECISIONS.md D-022).
+ * (DECISIONS.md D-025).
  *
  * GitHub Packages requires a package's scope to match the repository owner, so the kit cannot publish
  * `@invertus/*` from a `vust22`-owned repo. Renaming in the repo is not an option: 51 files import
