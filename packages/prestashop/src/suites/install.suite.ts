@@ -1,6 +1,4 @@
-import path from 'node:path';
 import { expect, test } from '../test.js';
-import { installModule } from '../flows/installModule.js';
 
 /**
  * Shared suite `install` (spec §5.3).
@@ -22,32 +20,23 @@ export function registerInstallSuite(): void {
     test('the module installs into a stock shop and reports itself active', async ({
       shopCli,
       e2eConfig,
+      moduleInstalled,
     }) => {
-      const moduleName = e2eConfig.module.name;
-      const sourceDir = path.resolve(process.cwd(), e2eConfig.module.source);
-
-      if (!(await shopCli.moduleIsActive(moduleName))) {
-        await installModule(shopCli, { name: moduleName, sourceDir });
-      }
-
+      // Installation itself is the `moduleInstalled` worker fixture's job — every suite needs it,
+      // so it cannot live only here (spec §7.2). What this test owns is the assertion.
+      expect(moduleInstalled, 'the module-installed fixture did not complete').toBe(true);
       expect(
-        await shopCli.moduleIsActive(moduleName),
-        `Module '${moduleName}' is not active after installation`,
+        await shopCli.moduleIsActive(e2eConfig.module.name),
+        `Module '${e2eConfig.module.name}' is not active after installation`,
       ).toBe(true);
     });
 
     test('the module appears in the back-office module manager', async ({
       admin,
-      shopCli,
       e2eConfig,
+      moduleInstalled,
     }) => {
-      const moduleName = e2eConfig.module.name;
-      if (!(await shopCli.moduleIsActive(moduleName))) {
-        await installModule(shopCli, {
-          name: moduleName,
-          sourceDir: path.resolve(process.cwd(), e2eConfig.module.source),
-        });
-      }
+      expect(moduleInstalled).toBe(true);
 
       const modules = await admin.goToModules();
       expect(

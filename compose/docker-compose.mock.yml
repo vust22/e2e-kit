@@ -1,15 +1,54 @@
 # Mock-mode overlay (spec §6.4).
 #
-# Provider API mocks join the network under the provider's own hostname, so the module
-# under test reaches them without a single line of module configuration. Mode switching is
-# purely a compose concern: the sandbox overlay simply defines no aliases, and
-# `api.mollie.com` resolves normally again.
+# Provider API mocks join the network under the provider's own hostname, so the module under
+# test reaches them without a single line of module configuration — the hard requirement in
+# §6.4: the module is byte-identical to what ships to merchants.
 #
-# The mock services themselves land in Phase 3; this file currently carries only the
-# mode wiring that Phase 1 needs, so that `--mode mock` is a real code path from day one
-# rather than something switched on later.
+# Mode switching is purely a compose concern. The sandbox overlay defines no aliases, so
+# `api.mollie.com` resolves normally again and nothing else has to change.
+#
+# Onboarding a future provider mock (§6.4 item 3): add a service here with its hostname in
+# `aliases`, and add the hostname to that mock's entry in `scripts/build-image.mjs` so the CA
+# issues a matching leaf. No image change beyond the SAN, no module change ever.
 
 services:
   shop:
     environment:
       E2E_PSP_MODE: mock
+    depends_on:
+      db:
+        condition: service_healthy
+      mollie-mock:
+        condition: service_healthy
+
+  mollie-mock:
+    image: ${E2E_MOLLIE_MOCK_IMAGE:-e2e-mock-mollie:latest}
+    platform: ${E2E_PLATFORM:-linux/amd64}
+    environment:
+      # The stand-in hosted checkout page is browser-facing and deliberately NOT intercepted
+      # (§6.4 item 5), so its links must use the host-published port Playwright can reach —
+      # not the in-network hostname.
+      MOCK_PUBLIC_URL: http://localhost:${E2E_MOLLIE_MOCK_PORT:-8090}
+      MOCK_LOG_LEVEL: ${E2E_MOLLIE_MOCK_LOG_LEVEL:-warn}
+    ports:
+      # Published so Playwright can drive the stand-in checkout page and the __admin control
+      # plane from the host. 443 stays internal: only the shop container needs it, and
+      # publishing it would collide with anything else on the machine.
+      - '${E2E_MOLLIE_MOCK_PORT:-8090}:8090'
+    networks:
+      default:
+        aliases:
+          # This one line is the entire interception mechanism. The module's SDK resolves
+          # api.mollie.com to this container; TLS validates because the leaf is signed by the
+          # E2E CA that both images were built from.
+          - api.mollie.com
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:8090/__admin/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 2s

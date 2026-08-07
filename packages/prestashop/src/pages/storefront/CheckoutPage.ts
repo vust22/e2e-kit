@@ -103,17 +103,44 @@ export class CheckoutPage extends BasePage {
     await expect(this.paymentStep).toBeVisible();
   }
 
-  /** intent: select the payment option whose module name matches, e.g. 'mollie' */
-  async selectPaymentModule(moduleName: string): Promise<void> {
+  /**
+   * intent: select the payment option contributed by a module, e.g. 'mollie'
+   *
+   * A payment module may legitimately contribute several options — typically one per payment
+   * method it offers. `label` narrows to one of them by its displayed name; only a module that
+   * offers exactly one option can be selected without it.
+   */
+  async selectPaymentModule(moduleName: string, label?: string | RegExp): Promise<void> {
     await expect(this.paymentOptions).toBeVisible();
-    const option = this.paymentOptions.locator(`input[data-module-name*="${moduleName}"]`);
-    // A module that renders zero or several payment options is a real product bug, not a
-    // locator problem — say so rather than timing out on a generic click.
+    const forModule = this.paymentOptions.locator(`input[data-module-name*="${moduleName}"]`);
+
+    if (label === undefined) {
+      const count = await forModule.count();
+      // Zero options is a broken module; several with no label to pick between them is a broken
+      // call. Both are worth saying out loud rather than timing out on a generic click.
+      await expect(
+        forModule,
+        count > 1
+          ? `Module '${moduleName}' offers ${count} payment options, so one has to be named. ` +
+            'Pass a label, or implement paymentOptionLabel(method) on the PSP.'
+          : `Expected exactly one payment option for module '${moduleName}'.`,
+      ).toHaveCount(1);
+      await forModule.check();
+      return;
+    }
+
+    // PrestaShop renders each option as a row containing the radio and its label, so filtering
+    // the row and then taking its input is what maps a displayed name back to a radio.
+    const row = this.paymentOptions
+      .locator('.payment-option')
+      .filter({ has: this.page.locator(`input[data-module-name*="${moduleName}"]`) })
+      .filter({ hasText: label });
+
     await expect(
-      option,
-      `Expected exactly one payment option for module '${moduleName}'.`,
+      row,
+      `Module '${moduleName}' offers no payment option labelled ${String(label)}.`,
     ).toHaveCount(1);
-    await option.check();
+    await row.locator('input[type="radio"]').check();
   }
 
   /** intent: list the module names of every payment option currently offered */
@@ -124,12 +151,58 @@ export class CheckoutPage extends BasePage {
     )).filter(Boolean);
   }
 
-  /** intent: accept terms and submit the order, landing on either PSP redirect or confirmation */
+  /** intent: read the order total shown on the payment step, as the shop formats it */
+  async totalText(): Promise<string> {
+    const total = this.page
+      .locator('#cart-summary .cart-total .value, .cart-summary-line.cart-total .value')
+      .first();
+    await expect(total).toBeVisible();
+    return ((await total.textContent()) ?? '').trim();
+  }
+
+  /**
+   * intent: accept terms and submit the order, landing on either PSP redirect or confirmation
+   *
+   * The button is not inside a form. PrestaShop's theme binds a delegated click handler that
+   * submits the *selected* payment option's form, and that handler bails silently — no error, no
+   * request, the page just sits there — if it cannot find a checked `payment-option` radio at the
+   * moment of the click.
+   *
+   * Payment modules commonly refresh part of the payment step over ajax when the terms checkbox
+   * or the selected option changes (Mollie refreshes the cart totals for payment fees). A click
+   * that lands mid-refresh is the race this method exists to close: wait for the module's requests
+   * to finish, re-assert that the option is still selected, and only then click.
+   */
   async placeOrder(): Promise<void> {
     if (await this.termsCheckbox.count()) {
       await this.termsCheckbox.check();
     }
+
+    const selectedOption = this.paymentOptions.locator('input[name="payment-option"]:checked');
+    await expect(
+      selectedOption,
+      'No payment option is selected, so there is nothing to place an order with.',
+    ).toHaveCount(1);
+
+    // `networkidle` is normally a smell, but here it is the actual condition: the theme's handler
+    // needs the option markup to have stopped being replaced, and a module's refresh is the only
+    // thing replacing it. There is no shop-side element that says "the refresh finished".
+    await this.page.waitForLoadState('networkidle');
+
+    await expect(selectedOption, 'The payment option was deselected by a page refresh.').toBeChecked();
     await expect(this.placeOrderButton).toBeEnabled();
     await this.placeOrderButton.click();
+
+    // The theme swallows a failed submit, so without this a broken checkout shows up much later
+    // as a confusing timeout somewhere in the PSP implementation.
+    await expect
+      .poll(() => this.page.url(), {
+        timeout: 20_000,
+        message:
+          'Placing the order did not navigate anywhere. The theme submits the selected payment ' +
+          "option's form from a delegated click handler and fails silently when it cannot; check " +
+          'that the module rendered a form for the selected option.',
+      })
+      .not.toMatch(/controller=order|\/order(\?|$)/);
   }
 }

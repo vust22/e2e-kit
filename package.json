@@ -10,7 +10,8 @@
   },
   "workspaces": [
     "packages/*",
-    "examples/consumer-module"
+    "examples/consumer-module",
+    "pilots/mollie"
   ],
   "bin": {
     "e2e-kit": "packages/core/bin/e2e-kit.js"

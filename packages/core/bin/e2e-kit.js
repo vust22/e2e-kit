@@ -2,7 +2,7 @@
 /**
  * `e2e-kit` CLI (spec §5.5).
  *
- * up | test | down | reset-db | build-image | doctor
+ * up | test | down | reset-db | prepare-module | build-image | doctor
  *
  * CI calls these exact commands, which is what keeps a developer's laptop and a runner on
  * the same code path (Goal 7). Anything that differs between the two must be an argument
@@ -15,6 +15,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { register } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -31,6 +32,10 @@ if (!process.env.E2E_KIT_STRIPPED) {
   process.exit(result.status ?? 1);
 }
 
+// A consumer's `e2e.config.ts` imports its PSP class as './psp/X.js' (spec §5.1), which plain
+// Node does not map back to the '.ts' on disk. See ts-extension-hook.mjs.
+register(pathToFileURL(path.join(here, 'ts-extension-hook.mjs')).href);
+
 const core = await import(pathToFileURL(path.join(here, '..', 'dist', 'index.js')).href);
 const {
   ComposeStack,
@@ -43,6 +48,9 @@ const {
   clearStackState,
   run,
   runOrThrow,
+  prepareModule,
+  waitForQuickTunnel,
+  assertTunnelReachesShop,
 } = core;
 
 // --- argument parsing ----------------------------------------------------------------
@@ -117,19 +125,61 @@ async function cmdUp() {
     E2E_PLATFORM: process.env.E2E_PLATFORM ?? 'linux/amd64',
   };
 
-  const stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: repoRoot, env });
+  // Preparing the module before the stack comes up means a failing `composer install` costs
+  // seconds instead of a boot cycle. `--reuse` keeps repeat local runs fast.
+  if (config.module.build || config.module.trustBundles.length > 0) {
+    const prepared = await prepareModule({
+      cwd,
+      config,
+      reuse: has('reuse-module'),
+      onProgress: info,
+    });
+    info(`Module prepared at ${path.relative(cwd, prepared.sourceDir)}`);
+  }
+
+  let stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: repoRoot, env });
 
   info(`Booting ${image} as project '${projectName}' in ${mode} mode on port ${port}`);
   const started = Date.now();
+
+  // Sandbox mode boots in two phases (spec §6.5): the tunnel first, so the shop can be given the
+  // public hostname it must write into shop_url before it generates any provider-facing URL.
+  let publicUrl = null;
+  if (mode === 'sandbox') {
+    info('Starting the Cloudflare quick tunnel');
+    await stack.up({ inherit: true, services: ['cloudflared'] });
+    publicUrl = await waitForQuickTunnel({
+      stack,
+      onProgress: (m) => process.stdout.write(`\r\x1b[2K\x1b[1;36m[e2e-kit]\x1b[0m ${m}`),
+    });
+    process.stdout.write('\n');
+    info(`Tunnel hostname: ${publicUrl}`);
+
+    env.E2E_PUBLIC_HOST = publicUrl.replace(/^https?:\/\//, '');
+    env.E2E_PUBLIC_URL = publicUrl;
+    stack = new ComposeStack({ projectName, files: composeFilesFor(mode), cwd: repoRoot, env });
+  }
+
   await stack.up({ inherit: true });
 
-  const shopUrl = `http://${domain}`;
+  // Always wait on the local port: the shop answers there in both modes, and a tunnel that is up
+  // but not yet routing would otherwise look like a boot failure.
+  const localUrl = `http://${domain}`;
   await waitForHttpOk({
-    url: `${shopUrl}/index.php`,
+    url: `${localUrl}/index.php`,
     timeoutMs: 180_000,
+    expectStatus: [200, 301, 302],
     onProgress: (m) => process.stdout.write(`\r\x1b[2K\x1b[1;36m[e2e-kit]\x1b[0m ${m}`),
   });
   process.stdout.write('\n');
+
+  // Playwright targets the public URL in sandbox mode, because that is the origin the module
+  // hands to Mollie and the one the browser is redirected back to.
+  const shopUrl = publicUrl ?? localUrl;
+  if (publicUrl) {
+    await assertTunnelReachesShop(publicUrl);
+    info(`Shop is reachable through the tunnel at ${publicUrl}`);
+  }
 
   const shopContainer = await stack.containerIdOrThrow('shop');
   const dbContainer = await stack.containerIdOrThrow('db');
@@ -245,6 +295,39 @@ async function cmdResetDb() {
   info('Database reset.');
 }
 
+/**
+ * Copy the module source into `.e2e-kit/module-build/<name>/`, run `module.build` there, and
+ * patch any pinned CA bundles (spec §8.2, DECISIONS.md D-014).
+ *
+ * Separate from `up` because it is the slow step (a `composer install` dwarfs a stack boot) and
+ * because it is what CI caches. `up` calls it only when the module declares work to do.
+ */
+async function cmdPrepareModule() {
+  const { config } = await loadConfig();
+  const reuse = has('reuse');
+
+  if (!config.module.build && config.module.trustBundles.length === 0) {
+    info(
+      `Module '${config.module.name}' declares no build and no trust bundles; ` +
+        'nothing to prepare — install reads module.source directly.',
+    );
+    return;
+  }
+
+  const started = Date.now();
+  const prepared = await prepareModule({ cwd, config, reuse, onProgress: info });
+  const seconds = Math.round((Date.now() - started) / 1000);
+
+  if (prepared.reused) {
+    info(`Reused ${prepared.sourceDir} (pass no --reuse to force a rebuild)`);
+    return;
+  }
+  info(`Prepared ${prepared.sourceDir} in ${seconds}s`);
+  for (const bundle of prepared.patchedBundles) {
+    info(`  trusted the E2E CA in ${bundle}`);
+  }
+}
+
 async function cmdBuildImage() {
   const args = ['scripts/build-image.mjs'];
   if (flag('ps', undefined)) args.push('--ps', String(flag('ps')));
@@ -284,10 +367,12 @@ function usage() {
 e2e-kit — Invertus E2E testing kit
 
   e2e-kit up [--ps 8] [--mode mock|sandbox] [--port 8080]   boot the compose stack
+                 [--reuse-module]                           ... reusing a prepared module tree
   e2e-kit test [--grep <pattern>] [--shard 1/2] [--headed]  run Playwright against it
   e2e-kit down                                              tear the stack down
   e2e-kit reset-db                                          fast DB reset to seed state
-  e2e-kit build-image [--ps 8|--all] [--no-cache]           build seeded platform images
+  e2e-kit prepare-module [--reuse]                          build the module + patch CA bundles
+  e2e-kit build-image [--ps 8|--all] [--no-cache]           build platform + provider mock images
   e2e-kit doctor                                            check the local environment
 `);
 }
@@ -297,6 +382,7 @@ const commands = {
   test: cmdTest,
   down: cmdDown,
   'reset-db': cmdResetDb,
+  'prepare-module': cmdPrepareModule,
   'build-image': cmdBuildImage,
   doctor: cmdDoctor,
 };

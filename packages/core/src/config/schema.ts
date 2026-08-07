@@ -30,6 +30,16 @@ export const E2EConfigSchema = z
       build: z.string().default(''),
       /** Path to the module source within the consumer repo. */
       source: z.string().default('.'),
+      /**
+       * CA bundles inside the built module that the E2E CA must be appended to, relative to
+       * the module root (DECISIONS.md D-014).
+       *
+       * Only needed by a module that pins its own bundle instead of trusting the system store —
+       * for example one whose HTTP client sets `CURLOPT_CAINFO`, which overrides both
+       * `curl.cainfo` and the OS trust store. Without this the mock's TLS handshake fails and
+       * every provider call errors out. Empty for the overwhelming majority of modules.
+       */
+      trustBundles: z.array(z.string().min(1)).default([]),
     }),
 
     platform: z.object({

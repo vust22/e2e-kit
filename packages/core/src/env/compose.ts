@@ -34,11 +34,21 @@ export class ComposeStack {
     };
   }
 
-  async up(opts: { inherit?: boolean } = {}): Promise<void> {
-    await runOrThrow(
-      [...this.baseArgv(), 'up', '-d', '--remove-orphans', '--wait', '--wait-timeout', '300'],
-      this.runOpts(opts.inherit ?? true),
-    );
+  /**
+   * Bring the stack (or a subset of services) up and wait for healthchecks.
+   *
+   * `services` exists for sandbox mode's two-phase boot: the tunnel has to be running before the
+   * shop starts, because the shop needs the tunnel's hostname to generate its URLs (spec §6.5).
+   * `--remove-orphans` is skipped for a partial up, or compose would tear down the services this
+   * call is deliberately not naming.
+   */
+  async up(opts: { inherit?: boolean; services?: string[] } = {}): Promise<void> {
+    const partial = (opts.services?.length ?? 0) > 0;
+    const argv = [...this.baseArgv(), 'up', '-d'];
+    if (!partial) argv.push('--remove-orphans');
+    argv.push('--wait', '--wait-timeout', '300');
+    if (partial) argv.push(...(opts.services as string[]));
+    await runOrThrow(argv, this.runOpts(opts.inherit ?? true));
   }
 
   async down(opts: { volumes?: boolean; inherit?: boolean } = {}): Promise<void> {

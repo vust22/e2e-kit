@@ -30,7 +30,13 @@ export function definePlaywrightConfig(opts: PresetOptions): PlaywrightTestConfi
     fullyParallel: true,
     forbidOnly: isCI,
     retries,
-    workers: isCI ? 2 : undefined,
+    // A payment module's shared suites all mutate the same shop: they install the module, rewrite
+    // its configuration and seed its tables. Those are per-*run* mutations, and the worker-scoped
+    // fixtures that perform them race when several workers share one shop — concurrent module
+    // installs and concurrent `cache:clear` both fail outright rather than degrade. Until that
+    // setup moves into a Playwright global-setup step, a PSP-bearing config runs single-worker.
+    // Non-payment modules keep the parallelism, because they mutate nothing shared.
+    workers: config.psp ? 1 : isCI ? 2 : undefined,
     timeout: 90_000,
     expect: { timeout: 15_000 },
     outputDir: 'test-results',

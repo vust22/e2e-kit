@@ -1,30 +1,35 @@
 # Sandbox-mode overlay (spec §6.5).
 #
-# Real provider test environments need two things the base stack cannot give them: the
-# provider must be able to reach our webhook endpoint, and the browser must come back to a
-# publicly resolvable URL. A Cloudflare quick tunnel supplies both without any account
-# binding or standing DNS.
+# Real provider test environments need two things the base stack cannot give them: the provider
+# must be able to reach our webhook endpoint, and the browser must come back to a publicly
+# resolvable URL. A Cloudflare quick tunnel supplies both without any account binding or standing
+# DNS.
 #
-# Deliberately defines no network aliases, so provider hostnames resolve to the real
-# internet — that difference is the entire mode switch.
+# Deliberately defines **no network aliases**, so provider hostnames resolve to the real internet.
+# That difference is the entire mode switch: the same images, the same commands, the same module
+# configuration — only DNS changes.
 #
-# Phase 3 wires the workflow side (parsing the assigned hostname out of the cloudflared
-# log into E2E_PUBLIC_URL); the container definition lives here so the topology is
-# reviewable now.
+# Boot order is two-phase and the CLI owns it (`e2e-kit up --mode sandbox`):
+#   1. bring up `cloudflared` and read the assigned `*.trycloudflare.com` hostname from its log;
+#   2. bring up `shop` with E2E_PUBLIC_HOST set to it, so the entrypoint writes that hostname into
+#      `shop_url` (spec §4.1 item 8) and every URL the module hands to Mollie is publicly
+#      reachable.
+# A single-phase boot cannot work: the shop must know its public hostname before it generates the
+# return and webhook URLs, and the hostname does not exist until the tunnel is up.
 
 services:
   shop:
     environment:
       E2E_PSP_MODE: sandbox
-      # Set by the caller once the tunnel hostname is known; the shop entrypoint rewrites
-      # shop_url to it on boot (spec §4.1 item 8).
+      # Set by the caller once the tunnel hostname is known.
       E2E_SHOP_DOMAIN: ${E2E_PUBLIC_HOST:-localhost:8080}
+      # Mollie only calls https endpoints, and the tunnel terminates TLS for us.
+      E2E_FORCE_SSL: ${E2E_FORCE_SSL:-1}
 
   cloudflared:
     image: cloudflare/cloudflared:latest
     platform: ${E2E_PLATFORM:-linux/amd64}
-    depends_on:
-      shop:
-        condition: service_healthy
+    # No dependency on the shop: the tunnel must be up *first* so its hostname can be fed to the
+    # shop. cloudflared retries the origin until it answers, which covers the gap.
     command: ['tunnel', '--no-autoupdate', '--url', 'http://shop:80']
     restart: unless-stopped

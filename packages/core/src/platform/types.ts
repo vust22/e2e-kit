@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { HostedCheckoutOutcome } from '../psp/contract.js';
+import type { HostedCheckoutOutcome, PspContext, PspContract } from '../psp/contract.js';
 
 /**
  * Platform-neutral contracts that a platform adapter (e.g. `@invertus/e2e-prestashop`)
@@ -37,6 +37,14 @@ export interface ShopCli {
   exec(argv: string[]): Promise<ExecResult>;
   /** Run a platform console command (PrestaShop: `bin/console`). Throws on non-zero exit. */
   console(command: string, args?: string[]): Promise<ExecResult>;
+  /**
+   * Clear the shop's cache.
+   *
+   * Not just `console('cache:clear')`: the adapter picks the environment and serialises
+   * concurrent clears, both of which are platform knowledge a PSP implementation should not have
+   * to carry. Always prefer this over calling the console command directly.
+   */
+  clearCache(): Promise<void>;
   /** Run a SQL statement against the shop database and return raw stdout. */
   sql(query: string): Promise<string>;
   /** Write module configuration values directly (fast, UI-independent). */
@@ -95,12 +103,29 @@ export interface TestOrderFactoryDeps {
   shopCli: ShopCli;
   storefront: Storefront;
   admin: AdminPanel;
+  /**
+   * The consumer's PSP implementation, or null for a non-payment module.
+   *
+   * Null rather than absent so a factory can give a precise error when a provider-paid order is
+   * requested without one, instead of failing somewhere inside a checkout.
+   */
+  psp: PspContract | null;
+  /** Builds the PSP context for a page; only the fixtures know how to resolve secrets. */
+  pspContext: (page: Page) => PspContext;
 }
 
 /** What a platform package must export as `adapter` from its `/adapter` entry point. */
 export interface PlatformAdapter {
   readonly type: string;
   createShopCli(env: ShopEnvironment): ShopCli;
+  /**
+   * Make sure the module under test is installed, installing it if not.
+   *
+   * Every suite needs an installed module, not just the `install` suite — and spec §7.2 requires
+   * each test to pass in isolation, so no suite may rely on another having run first. Must be
+   * idempotent and safe to call from several workers at once.
+   */
+  ensureModuleInstalled(cli: ShopCli, opts: { name: string; sourceDir: string }): Promise<void>;
   createStorefront(page: Page, env: ShopEnvironment): Storefront;
   createAdminPanel(page: Page, env: ShopEnvironment): AdminPanel;
   createTestOrderFactory(deps: TestOrderFactoryDeps): TestOrderFactory;

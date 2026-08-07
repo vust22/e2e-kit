@@ -30,6 +30,10 @@ export {
   type PspSetupTools,
   type PspConstructor,
   type CompleteHostedCheckoutOptions,
+  type HostedCheckoutResult,
+  type ProviderApiCall,
+  type ApiCallsQuery,
+  type BackOfficeRefundOptions,
   type EnsureWebhookProcessedOptions,
 } from './psp/contract.js';
 
@@ -69,8 +73,13 @@ export {
   run,
   runOrThrow,
   CommandError,
+  runOnce,
+  RunOnceError,
   waitForHttpOk,
   waitFor,
+  waitForQuickTunnel,
+  assertTunnelReachesShop,
+  TunnelError,
   EnvBootError,
   readStackState,
   readStackStateOrThrow,
@@ -84,6 +93,18 @@ export {
 } from './env/index.js';
 
 export { definePlaywrightConfig, type PresetOptions } from './reporting/index.js';
+
+export {
+  prepareModule,
+  patchTrustBundles,
+  resolveModuleSourceDir,
+  preparedModuleDir,
+  e2eCaPath,
+  ModuleBuildError,
+  MODULE_BUILD_DIR,
+  type PrepareModuleOptions,
+  type PreparedModule,
+} from './module/index.js';
 
 export {
   healOverrides,

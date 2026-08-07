@@ -5,6 +5,7 @@ import type {
   TestOrderFactoryDeps,
 } from '@invertus/e2e-core';
 import { PrestaShopCli } from './cli/ShopCli.js';
+import { installModule } from './flows/installModule.js';
 import { AdminPanel } from './facades/AdminPanel.js';
 import { Storefront } from './facades/Storefront.js';
 import { PrestaShopTestOrderFactory } from './orders/TestOrderFactory.js';
@@ -21,6 +22,12 @@ export const adapter: PlatformAdapter = {
 
   createShopCli(env: ShopEnvironment) {
     return new PrestaShopCli(env);
+  },
+
+  async ensureModuleInstalled(cli, opts) {
+    const shopCli = cli as PrestaShopCli;
+    if (await shopCli.moduleIsActive(opts.name)) return;
+    await installModule(shopCli, { name: opts.name, sourceDir: opts.sourceDir });
   },
 
   createStorefront(page: Page, env: ShopEnvironment) {

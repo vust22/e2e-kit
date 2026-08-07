@@ -1,4 +1,10 @@
-import { expect, type HostedCheckoutOutcome, type PspContext, type PspContract } from '@invertus/e2e-core';
+import {
+  expect,
+  type HostedCheckoutOutcome,
+  type HostedCheckoutResult,
+  type PspContext,
+  type PspContract,
+} from '@invertus/e2e-core';
 import type { Storefront } from '../facades/Storefront.js';
 import type { CheckoutPage } from '../pages/storefront/CheckoutPage.js';
 import { DEFAULT_PRODUCT, SEED, type SeedCustomer } from '../seed/dataset.js';
@@ -128,19 +134,23 @@ export interface PayWithOptions {
  * Note: the spec's signature is `(checkout, psp, outcome)`. `PspContract.completeHostedCheckout`
  * needs a `PspContext`, which only the fixtures can build, so it is passed explicitly
  * here rather than reconstructed from environment variables inside the flow.
+ *
+ * Returns whatever the PSP could tell us about the attempt — in particular the order reference,
+ * which the caller needs before any order exists (see `HostedCheckoutResult.reference`).
  */
 export async function payWith(
   checkout: CheckoutPage,
   psp: PspContract,
   outcome: HostedCheckoutOutcome,
   opts: PayWithOptions,
-): Promise<void> {
+): Promise<HostedCheckoutResult> {
   const method = opts.method ?? psp.methods[0];
   if (!method) {
     throw new Error(`PSP '${psp.id}' declares no methods, so there is nothing to pay with.`);
   }
 
-  await checkout.selectPaymentModule(psp.id);
+  await checkout.selectPaymentModule(psp.id, psp.paymentOptionLabel?.(method));
   await checkout.placeOrder();
-  await psp.completeHostedCheckout(opts.ctx, { method, outcome });
+  const result = await psp.completeHostedCheckout(opts.ctx, { method, outcome });
+  return result ?? {};
 }

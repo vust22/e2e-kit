@@ -7,4 +7,4 @@ import config from '../e2e.config.js';
  * One line is the whole integration: the suites themselves live in the kit, so adding
  * coverage across every consumer is a kit release, not a change in each repo (Goal 3).
  */
-registerSharedSuites(config.suites.shared);
+registerSharedSuites(config);

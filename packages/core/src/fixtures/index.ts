@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { test as base, expect } from '@playwright/test';
 import { loadE2EConfig, resolveConfigPath, type E2EConfig } from '../config/index.js';
 import { loadPlatformAdapter } from '../platform/registry.js';
@@ -16,8 +17,13 @@ import {
   resolveSecrets,
   resolveShopEnvironment,
 } from './environment.js';
+import { resolveModuleSourceDir } from '../module/build.js';
+import { runOnce } from '../env/once.js';
+import { stateFilePath } from '../env/state.js';
 
 export interface KitWorkerFixtures {
+  /** True once the module under test is installed in the running shop. */
+  moduleInstalled: boolean;
   /** The consumer's validated `e2e.config.ts`. */
   e2eConfig: E2EConfig;
   /** Coordinates of the running stack (URL, container, mode, credentials). */
@@ -28,6 +34,19 @@ export interface KitWorkerFixtures {
   shopCli: ShopCli;
   /** The consumer's PSP implementation, already `setup()`-ed for this worker. */
   psp: PspContract;
+  /**
+   * The same instance, or null when `e2e.config.ts` declares no `psp` block.
+   *
+   * Fixtures cannot be depended on conditionally, so anything that works both with and without a
+   * provider — the `testOrder` factory, most obviously — depends on this instead of `psp`.
+   *
+   * `auto`, for the same reason as `moduleInstalled`: `psp.setup` is what writes the module's API
+   * credentials and seeds its payment methods, and a consumer's own specs assume a *configured*
+   * module without declaring a dependency on the fixture that configures it. Without `auto`, a
+   * spec that only asks for `admin` runs against an installed-but-unconfigured module and sees an
+   * empty back office — which looks like a broken module rather than a missing fixture.
+   */
+  pspOrNull: PspContract | null;
 }
 
 export interface KitTestFixtures {
@@ -96,24 +115,63 @@ export const test = base.extend<KitTestFixtures, KitWorkerFixtures>({
     { scope: 'worker' },
   ],
 
-  psp: [
-    async ({ e2eConfig, adapter, shopEnv, shopCli, browser }, use) => {
-      if (!e2eConfig.psp) throw new MissingPspError();
+  /**
+   * The module under test, installed.
+   *
+   * `auto`, because an installed module is the premise of the entire kit: a consumer's own specs
+   * reach for `admin` or `shopCli` and expect the module's config page, tables and order states to
+   * exist, without it occurring to anyone to declare a dependency on installation. Without `auto`
+   * the first spec alphabetically runs against a stock shop and fails with
+   * "Table 'ps_mol_payment_method' doesn't exist", which reads like a broken module rather than a
+   * missing fixture.
+   *
+   * Idempotent and coordinated across workers (D-019), so requesting it costs nothing after the
+   * first time and no suite depends on `install` having run first (spec §7.2).
+   */
+  moduleInstalled: [
+    async ({ e2eConfig, adapter, shopCli }, use) => {
+      // Once per run, not once per worker: installing mutates the one shared shop, and several
+      // workers doing it at the same time corrupts the module's tables.
+      await runOnce({ stateDir: onceDir(), key: 'module-install' }, async () => {
+        await adapter.ensureModuleInstalled(shopCli, {
+          name: e2eConfig.module.name,
+          sourceDir: resolveModuleSourceDir(process.cwd(), e2eConfig),
+        });
+        return true;
+      });
+      await use(true);
+    },
+    { scope: 'worker', auto: true },
+  ],
 
-      const instance = new e2eConfig.psp.implementation();
-
-      // `setup` runs once per worker and needs a browser page for config-page driven
-      // providers. It gets a dedicated context so it can never leak state into tests.
-      const context = await browser.newContext({ baseURL: shopEnv.shopUrl });
-      const page = await context.newPage();
-      const admin = adapter.createAdminPanel(page, shopEnv);
-      try {
-        await instance.setup(pspContextFor(page, shopEnv, e2eConfig), { admin, shopCli });
-      } finally {
-        await context.close();
+  pspOrNull: [
+    async ({ e2eConfig, adapter, shopEnv, shopCli, browser, moduleInstalled }, use) => {
+      // Depending on `moduleInstalled` is the ordering guarantee: `psp.setup` writes module
+      // configuration and module tables, neither of which exists before the module is installed.
+      void moduleInstalled;
+      if (!e2eConfig.psp) {
+        await use(null);
+        return;
       }
 
+      // Spec §3.6: setup is "called once before the suite". It writes module configuration and
+      // clears the shop cache, so running it per worker means concurrent cache clears against one
+      // shop — which fail, in ways that look like anything but the cause. The instance is still
+      // per worker (it holds no state worth sharing); only the shop-mutating work is coordinated.
+      const instance = new e2eConfig.psp.implementation();
+      await runOnce({ stateDir: onceDir(), key: `psp-setup-${instance.id}` }, async () => {
+        await setUpPsp({ instance, e2eConfig, adapter, shopEnv, shopCli, browser });
+        return true;
+      });
       await use(instance);
+    },
+    { scope: 'worker', auto: true },
+  ],
+
+  psp: [
+    async ({ pspOrNull }, use) => {
+      if (!pspOrNull) throw new MissingPspError();
+      await use(pspOrNull);
     },
     { scope: 'worker' },
   ],
@@ -131,15 +189,48 @@ export const test = base.extend<KitTestFixtures, KitWorkerFixtures>({
     await use(admin as PlatformFixtures['admin']);
   },
 
-  testOrder: async ({ adapter, shopEnv, shopCli, storefront, admin }, use) => {
+  testOrder: async ({ adapter, shopEnv, shopCli, storefront, admin, pspOrNull, e2eConfig }, use) => {
     const factory: TestOrderFactory = adapter.createTestOrderFactory({
       env: shopEnv,
       shopCli,
       storefront: storefront as Storefront,
       admin: admin as AdminPanel,
+      psp: pspOrNull,
+      pspContext: (page) => pspContextFor(page, shopEnv, e2eConfig),
     });
     await use(factory as PlatformFixtures['testOrder']);
   },
 });
 
+/** `psp.setup` runs once per worker; kept out of the fixture body so `pspOrNull` stays readable. */
+async function setUpPsp(args: {
+  instance: PspContract;
+  e2eConfig: E2EConfig;
+  adapter: PlatformAdapter;
+  shopEnv: ShopEnvironment;
+  shopCli: ShopCli;
+  browser: import('@playwright/test').Browser;
+}): Promise<PspContract> {
+  const { instance, e2eConfig, adapter, shopEnv, shopCli, browser } = args;
+  if (!e2eConfig.psp) throw new MissingPspError();
+
+  // `setup` needs a browser page for config-page driven providers. It gets a dedicated
+  // context so it can never leak state into tests.
+  const context = await browser.newContext({ baseURL: shopEnv.shopUrl });
+  const page = await context.newPage();
+  const admin = adapter.createAdminPanel(page, shopEnv);
+  try {
+    await instance.setup(pspContextFor(page, shopEnv, e2eConfig), { admin, shopCli });
+  } finally {
+    await context.close();
+  }
+
+  return instance;
+}
+
 export { expect };
+
+/** Where cross-worker coordination markers live: alongside the stack state, so `down` clears them. */
+function onceDir(): string {
+  return path.dirname(stateFilePath(process.cwd()));
+}

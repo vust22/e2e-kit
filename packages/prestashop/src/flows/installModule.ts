@@ -58,7 +58,12 @@ export async function installModule(cli: PrestaShopCli, opts: InstallModuleOptio
 
   await cli.execAsRoot(['chown', '-R', 'www-data:www-data', target]);
 
+  // Two Playwright workers installing the same module at once corrupts the module tables, and
+  // `moduleInstalled` is a per-worker fixture — so the install itself is serialised in the
+  // container, the same way cache clears are.
   const result = await cli.exec([
+    'flock',
+    '/tmp/e2e-module-install.lock',
     'php',
     'bin/console',
     'prestashop:module',

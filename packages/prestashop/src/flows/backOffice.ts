@@ -5,8 +5,11 @@ import type { ModuleConfigPage } from '../pages/admin/ModuleConfigPage.js';
 export interface VerifyOrderOptions {
   reference?: string;
   orderId?: number;
-  /** Expected order-state NAME, e.g. 'Payment accepted'. */
-  expectedState: string;
+  /**
+   * Expected order-state NAME, e.g. 'Payment accepted'; `null` asserts that no order exists
+   * for this reference at all (DECISIONS.md D-015).
+   */
+  expectedState: string | null;
   /** Expected total as displayed, e.g. '€24.98'. Compared loosely on digits. */
   expectedTotal?: string;
   /** How long to keep re-reading the state; webhooks are eventually consistent. */
@@ -25,6 +28,17 @@ export async function verifyOrderInBackOffice(
 ): Promise<void> {
   if (!opts.reference && !opts.orderId) {
     throw new Error('verifyOrderInBackOffice needs either a reference or an orderId');
+  }
+
+  if (opts.expectedState === null) {
+    if (!opts.reference) {
+      throw new Error(
+        'verifyOrderInBackOffice with expectedState: null needs a reference — there is no order ' +
+          'id to look up when the expectation is that no order exists.',
+      );
+    }
+    await expectNoOrder(admin, opts.reference);
+    return;
   }
 
   if (opts.orderId) {
@@ -62,6 +76,33 @@ export async function verifyOrderInBackOffice(
       },
     )
     .toContain(opts.expectedState);
+}
+
+/**
+ * Assert that no order exists for a reference.
+ *
+ * Deliberately re-checks after a delay instead of reading once: the failure this guards against
+ * is an order arriving *late* from a webhook that should not have created one, and a single
+ * immediate read would pass while that is still in flight.
+ */
+async function expectNoOrder(admin: AdminPanel, reference: string): Promise<void> {
+  const orders = await admin.goToOrders();
+  await orders.searchByReference(reference);
+
+  await expect(
+    orders.rowForReference(reference),
+    `Expected no back-office order for reference ${reference}, but one exists. ` +
+      'Either the module now creates orders for this outcome, or the outcome was applied wrongly.',
+  ).toHaveCount(0);
+
+  // One reload after the grid has settled: cheap, and it turns a flaky pass into a real one.
+  await admin.page.reload();
+  await orders.searchByReference(reference);
+  await expect(
+    orders.rowForReference(reference),
+    `A back-office order for reference ${reference} appeared on re-check — a webhook created an ` +
+      'order for an outcome that should not produce one.',
+  ).toHaveCount(0);
 }
 
 /** Compare money by its digits so '€24.98' and '24,98 €' do not disagree spuriously. */
