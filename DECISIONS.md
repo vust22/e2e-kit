@@ -370,8 +370,16 @@ scaffolding a real consumer would not want. It was left byte-identical rather th
 "the overlay is a verbatim drop-in" is the property this entry claims and diverging the two copies
 would defeat the test.
 
-**Still open** until that branch is pushed and its PR runs green — the last Phase 3 carry-over bullet
-("Mollie repo PRs blocked/green on mock matrix"), and the cross-repository gap D-027 records.
+**RESOLVED (2026-08-07).** The branch was pushed and `vust22/mollie#1` runs green:
+`31 passed, 3 skipped` on **both** PrestaShop 8 and 9, matching the local run exactly (68 specs in the
+merged report, verified by downloading the artifact and counting — not by reading the check mark, see
+D-035). The overlay proved to be a genuine drop-in: only the `uses:` owner, two alias devDependencies,
+and a lockfile entry were needed. `git diff` against the fork's master touches nothing but `e2e/`,
+`.github/` and `package.json`.
+
+The Phase 3 carry-over bullet "Mollie repo PRs blocked/green on mock matrix" is satisfied, and D-027's
+cross-repository gap is closed. Getting there required nine consumer-only fixes (D-028 item 4, D-029 …
+D-035) — every one of them invisible from inside the kit.
 
 ---
 
@@ -671,9 +679,16 @@ pull, blob merging, the report zip and the summary — but **not the cross-repos
 token, the package read and the image pull are all cross-repo. **Phase 2 is therefore not DoD-complete.**
 The gap is recorded in `docs/HANDOFF.md` as the first thing to close.
 
-**Revisit when:** the owner green-lights pushing the Mollie fork branch. The overlay is already
-committed locally at `/Users/justas/e2e-playbook/mollie-fork` on `e2e-kit-adoption`; pushing it and
-opening the PR closes both this entry and the last Phase 3 carry-over bullet.
+**RESOLVED (2026-08-07).** `vust22/mollie#1` runs the reusable workflow across a real repository
+boundary and is green: `31 passed, 3 skipped` on both platform versions. The cross-repo path — a
+different repo's `GITHUB_TOKEN` reading published packages, pulling the matched image set, and calling
+`e2e-reusable.yml@v1` — is now demonstrated rather than assumed.
+
+**The in-kit caller stays.** `e2e-selftest.yml` and the three `Compile the workspace (kit repo only)`
+steps were to be deleted once this proof existed. On reflection that is the wrong trade: the selftest is
+cheap and catches reusable-workflow regressions *before* a consumer does, and deleting working CI to
+retire a caveat is a bad exchange. What changes is its status — it is a smoke test now, not evidence.
+The nine defects it failed to catch are the standing record of what it cannot prove.
 
 ---
 
