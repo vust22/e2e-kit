@@ -104,6 +104,19 @@ checkout → hosted payment page → outcome → webhook → back-office order-s
 - a `psp.sandbox.enabled: true` with an empty `requiredSecrets` — the sandbox job would run
   unauthenticated.
 
+### Nothing else — and add `.e2e-kit/` to `.gitignore`
+
+You do **not** write a `playwright.config.ts`. The kit generates one in `.e2e-kit/` from your
+`e2e.config.ts`, together with a `package.json` marking that directory ESM so it loads even when your own
+package is CommonJS. Add `.e2e-kit/` to your `.gitignore` — it holds the generated config, the prepared
+module build tree, and run-once markers, none of which belong in git.
+
+If you need to customise Playwright, write your own `playwright.config.ts` in the repo root calling
+`definePlaywrightConfig({ config, testDir, overrides })`. The CLI prefers yours over the generated one.
+**Caveat:** a hand-written config only loads if your `package.json` declares `"type": "module"` — the kit
+is ESM-only and has no CommonJS entry point (DECISIONS.md D-034). If your repo is CommonJS, use the
+generated config.
+
 ### The `package.json` edit
 
 ```json
