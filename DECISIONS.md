@@ -825,3 +825,58 @@ actual cost was larger and different: **a defect in the main path of the module 
 repository could surface (with D-028 item 4, D-029, D-030), and this one is the most serious — the
 others broke CI, this one broke the product. Any future "we can prove it from inside the kit" claim
 should be read against that record.
+
+---
+
+## D-032 — OPEN: the E2E CA is unreachable from a consumer repo, so `trustBundles` cannot work there
+
+**Status: unresolved.** Recorded to preserve the diagnosis; the fix needs a decision.
+
+**Spec ref:** §4.1 item 9, §6.4 item 2; DECISIONS.md D-009 (CA generated per image build), D-014 (trust
+bundles patched because the module pins `CURLOPT_CAINFO`).
+
+**The failure.** In the Mollie fork's first real run, `prepare-module` fails with:
+
+```
+module.trustBundles is set but the E2E CA is missing at
+  /home/runner/work/mollie/mollie/node_modules/images/prestashop/e2e-ca/e2e-ca.crt
+```
+
+Two problems, one shallow and one structural:
+
+1. **Shallow:** `e2eCaPath()` resolves relative to the running package. Inside the kit that walks up
+   from `packages/core/dist/` to the repo root and finds `images/prestashop/e2e-ca/`. Inside a consumer
+   it walks up from `node_modules/@invertus/e2e-core/dist/` and produces
+   `node_modules/images/prestashop/e2e-ca/`, which is meaningless.
+
+2. **Structural, and the real issue:** the CA lives in the **kit's working tree**, produced by
+   `scripts/gen-ca.mjs` during an image build (D-009). A consumer never builds images — it pulls a
+   published, matched set from GHCR (D-026) — so it has no CA anywhere, at any path. Fixing the path
+   resolution alone would just move the error.
+
+**Consequence:** `trustBundles` is inoperable in every consumer repo, and it is **not optional for
+Mollie**: the module pins its own CA bundle via `CURLOPT_CAINFO`, so without the patch every Mollie API
+call fails after a retry storm (D-014). Mollie's mock matrix therefore cannot pass from a consumer repo
+until this is resolved. This is the fifth consumer-only defect after D-028 item 4, D-029, D-030 and
+D-031, and the second (with D-031) that the D-016 read-only-clone arrangement concealed — locally the
+kit's own tree was always present, so the CA was always found.
+
+**Recommended fix — extract the CA from the image the run is already using.** The CA cert is already
+baked into the published PrestaShop image's trust store (D-009), and D-026 guarantees the shop image and
+the provider mock share one. So the consumer can obtain the exact right CA with no new distribution
+channel and no new key material:
+
+```
+docker run --rm "$E2E_PS_IMAGE" cat /usr/local/share/ca-certificates/e2e-ca.crt
+```
+
+`prepareModule` would take the resolved image reference, extract the CA to a temp file, and patch the
+module's bundle from that. This keeps D-009's "generated per build, never committed" property, makes the
+CA travel with the matched set it belongs to, and removes the assumption that the kit's source tree is
+on disk.
+
+**Alternatives considered and rejected:** shipping the CA inside the npm package (it is per-build key
+material and would go stale against the image); having consumers build images (defeats publishing, and
+the boot budget); committing a fixed CA (D-009 exists precisely to avoid a committed private key).
+
+**Revisit:** immediately — this blocks the Mollie fork PR, which is Phase 2's acceptance gate.
