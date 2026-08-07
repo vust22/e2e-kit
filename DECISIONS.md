@@ -933,3 +933,56 @@ D-032's shallow half.
 **Consequence:** this is the **sixth** consumer-only defect (D-028 item 4, D-029, D-030, D-031, D-032,
 D-033), and the fourth traceable to the kit-vs-consumer environment difference that `e2e-selftest.yml`
 cannot see — inside the kit, the repo root genuinely is three levels up.
+
+---
+
+## D-034 — OPEN: the consumer needs a Playwright config the file set never mentioned, and it only loads under ESM
+
+**Status: unresolved — needs a decision.** Two coupled findings from the first real consumer run.
+
+**Spec ref:** §5.1 (the "2-file adoption"), §5.5, §8.2.
+
+**Finding 1 — the documented file set is incomplete.** `e2e-kit test` calls `findPlaywrightConfig()`,
+which requires `playwright.config.ts` (or `e2e/playwright.config.ts`, or `playwright.config.js`) in the
+consumer. §5.1 lists `.github/workflows/e2e.yml`, `e2e/e2e.config.ts`, `e2e/psp/*` and `e2e/specs/**` —
+and never mentions it. The Mollie pilot has one, but at the *pilot root*, so it is not part of the
+`e2e/` overlay D-016 describes as the drop-in; copying the overlay into the fork produced a repo that
+could not run tests. So the adoption is really **three** files, or the kit should stop needing the third.
+
+**Finding 2 — and the file only works if the consumer is an ESM package.** With the config added, the
+run fails:
+
+```
+No "exports" main defined in node_modules/@invertus/e2e-core/package.json
+  at playwright.config.ts:1:1
+```
+
+`@invertus/e2e-core` is `"type": "module"` and its `exports` map declares only `types` and `import` —
+there is no `require` condition. Playwright picks a config's module format from the nearest
+`package.json` `type`; the kit's own pilot lives in an ESM workspace so it resolved through `import`,
+while the Mollie module's `package.json` is CommonJS (it ships Cypress tooling), so Playwright
+`require`s the config and finds no CJS entry point.
+
+**Why this was invisible until now:** both findings are consequences of the consumer's *own* packaging,
+which the kit's in-repo pilot cannot vary — `pilots/mollie` inherits the kit's ESM workspace. This is the
+seventh and eighth consumer-only defect (after D-028 item 4, D-029, D-030, D-031, D-032, D-033).
+
+**Options, in preference order:**
+
+1. **Synthesise the Playwright config in the kit.** `e2e-kit test` writes
+   `.e2e-kit/playwright.config.ts` alongside a `.e2e-kit/package.json` containing `{"type":"module"}` —
+   which makes that directory ESM regardless of the consumer's own `type` — and passes it via
+   `--config`. This fixes **both** findings at once: the consumer needs no Playwright config (restoring
+   the 2-file adoption §5.1 promises), and the kit controls the module format instead of inheriting it.
+   The `testDir` becomes an absolute path derived from `suites.custom`.
+2. **Publish a CJS build alongside ESM** and add a `require` condition. Fixes finding 2 properly and
+   helps any CJS consumer, but it is a dual-build change to both packages and does not address
+   finding 1.
+3. **Require consumers to set `"type": "module"`.** One line for them, but invasive in a PHP module repo
+   with existing CommonJS tooling, and it would need documenting as a hard prerequisite — which
+   contradicts "2 files, no other changes".
+
+**Recommendation: option 1**, with option 2 as a later robustness improvement rather than a prerequisite.
+
+**Revisit:** immediately — this is the last known blocker on the Mollie fork PR, which is Phase 2's
+acceptance gate.
