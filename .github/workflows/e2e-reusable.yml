@@ -151,8 +151,18 @@ jobs:
         run: npx tsc --build
       - run: npx playwright install --with-deps chromium
 
+      # COMPOSER_AUTH is supplied because module builds routinely pull dist archives through
+      # GitHub's API, which rate-limits anonymous requests per IP — on shared runners that fails as
+      # `Could not authenticate against github.com`. This is the caller's own GITHUB_TOKEN, not a
+      # provider secret, so spec §11's "no provider secrets in mock jobs" rule is unaffected.
+      #
+      # Note the tradeoff: `module.build` is an arbitrary command from the consumer's own config, and
+      # this puts a token in its environment. That is standard practice for composer in CI and the token
+      # is the consumer's own, but it is a deliberate choice rather than an oversight.
       - name: Build the module
         working-directory: ${{ needs.prepare.outputs.consumer-dir }}
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
         run: npx e2e-kit prepare-module --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Boot the stack
@@ -276,6 +286,8 @@ jobs:
       - name: Build the module
         if: steps.guard.outputs.skip == 'false'
         working-directory: ${{ needs.prepare.outputs.consumer-dir }}
+        env:
+          COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
         run: npx e2e-kit prepare-module --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Boot and run
