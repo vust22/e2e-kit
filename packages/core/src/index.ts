@@ -20,8 +20,11 @@ export {
   SHARED_SUITES,
   loadE2EConfig,
   resolveConfigPath,
+  ciMatrix,
   type E2EConfigInput,
   type SharedSuite,
+  type CiMatrix,
+  type CiMatrixEntry,
 } from './config/index.js';
 
 export {

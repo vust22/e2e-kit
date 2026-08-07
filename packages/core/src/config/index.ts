@@ -8,3 +8,4 @@ export {
   type SharedSuite,
 } from './schema.js';
 export { loadE2EConfig, resolveConfigPath } from './loader.js';
+export { ciMatrix, type CiMatrix, type CiMatrixEntry } from './ciMatrix.js';

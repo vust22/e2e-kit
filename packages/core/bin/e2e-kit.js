@@ -51,6 +51,7 @@ const {
   prepareModule,
   waitForQuickTunnel,
   assertTunnelReachesShop,
+  ciMatrix,
 } = core;
 
 // --- argument parsing ----------------------------------------------------------------
@@ -296,6 +297,18 @@ async function cmdResetDb() {
 }
 
 /**
+ * Print the CI job matrix as JSON (spec §8.1).
+ *
+ * The reusable workflow's `prepare` job reads this instead of duplicating the matrix in YAML, so a
+ * consumer changing `ci.shards` or `platform.versions` changes CI with no workflow edit. Writes to
+ * stdout and nothing else — `info()` logs to stderr, so the output stays machine-readable.
+ */
+async function cmdCiMatrix() {
+  const { config } = await loadConfig();
+  process.stdout.write(`${JSON.stringify(ciMatrix(config))}\n`);
+}
+
+/**
  * Copy the module source into `.e2e-kit/module-build/<name>/`, run `module.build` there, and
  * patch any pinned CA bundles (spec §8.2, DECISIONS.md D-014).
  *
@@ -374,6 +387,7 @@ e2e-kit — Invertus E2E testing kit
   e2e-kit prepare-module [--reuse]                          build the module + patch CA bundles
   e2e-kit build-image [--ps 8|--all] [--no-cache]           build platform + provider mock images
   e2e-kit doctor                                            check the local environment
+  e2e-kit ci-matrix                                         print the CI job matrix as JSON
 `);
 }
 
@@ -385,6 +399,7 @@ const commands = {
   'prepare-module': cmdPrepareModule,
   'build-image': cmdBuildImage,
   doctor: cmdDoctor,
+  'ci-matrix': cmdCiMatrix,
 };
 
 const handler = commands[command];
