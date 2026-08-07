@@ -3,13 +3,16 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   rmSync,
   statSync,
+  writeFileSync,
 } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { runOrThrow } from '../env/process.js';
+import { run, runOrThrow } from '../env/process.js';
 import type { E2EConfig } from '../config/schema.js';
 
 /**
@@ -74,6 +77,75 @@ export function resolveModuleSourceDir(cwd: string, config: E2EConfig): string {
 const EXCLUDED_TOP_LEVEL = new Set(['.git', 'node_modules', '.e2e-kit']);
 
 /**
+ * Where `images/prestashop/Dockerfile` installs the E2E CA inside the platform image.
+ *
+ * This is the CA's only reliable location from a consumer's point of view — see
+ * {@link resolveE2ECa} and DECISIONS.md D-032.
+ */
+export const IMAGE_CA_PATH = '/usr/local/share/ca-certificates/e2e-ca.crt';
+
+/**
+ * Resolve a readable path to the E2E CA certificate.
+ *
+ * Two sources, in order:
+ *
+ *  1. **The kit's source tree**, when present — `images/prestashop/e2e-ca/e2e-ca.crt`, produced by
+ *     `scripts/gen-ca.mjs`. This is the kit's own development flow.
+ *  2. **The platform image**, otherwise. A consumer repo never generates a CA: it pulls a prebuilt,
+ *     matched image set from the registry (D-026), so no path in its checkout contains one. But the CA
+ *     *is* baked into that image's trust store (D-009), and D-026 guarantees the shop image and the
+ *     provider mock share it — so reading it out of the image yields exactly the right certificate with
+ *     no new distribution channel and no committed key material.
+ *
+ * `--entrypoint cat` is required: the PrestaShop image's entrypoint is its own boot script, and without
+ * the override `docker run` would start a shop instead of printing a file.
+ */
+export async function resolveE2ECa(opts: {
+  config: E2EConfig;
+  log?: (message: string) => void;
+}): Promise<string> {
+  const log = opts.log ?? (() => undefined);
+
+  const local = e2eCaPath();
+  if (existsSync(local)) {
+    log(`using the E2E CA from the kit source tree: ${local}`);
+    return local;
+  }
+
+  const image =
+    process.env.E2E_PS_IMAGE ??
+    opts.config.platform.imageOverride ??
+    `e2e-ps:${opts.config.platform.versions[0]}`;
+
+  log(`extracting the E2E CA from ${image}:${IMAGE_CA_PATH}`);
+  const result = await run([
+    'docker',
+    'run',
+    '--rm',
+    // Pinned for the same reason as everywhere else (D-003): the platform images are amd64-only, and
+    // leaving it implicit produces a mismatch warning on Apple Silicon.
+    '--platform',
+    process.env.E2E_PLATFORM ?? 'linux/amd64',
+    '--entrypoint',
+    'cat',
+    image,
+    IMAGE_CA_PATH,
+  ]);
+
+  if (result.code !== 0 || !result.stdout.includes('BEGIN CERTIFICATE')) {
+    throw new ModuleBuildError(
+      `Could not read the E2E CA from image '${image}' at ${IMAGE_CA_PATH}. ` +
+        'module.trustBundles needs it because the module pins its own CA bundle (D-014). ' +
+        `Check that the image is pullable and is an e2e-kit platform image.\n${result.stderr || result.stdout}`.trim(),
+    );
+  }
+
+  const dest = path.join(mkdtempSync(path.join(os.tmpdir(), 'e2e-ca-')), 'e2e-ca.crt');
+  writeFileSync(dest, result.stdout, 'utf8');
+  return dest;
+}
+
+/**
  * Copy a module checkout into the build tree, **entry by entry rather than in one call**.
  *
  * The obvious implementation — a single `cpSync(source, target, { recursive: true, filter })` —
@@ -133,7 +205,11 @@ export async function prepareModule(opts: PrepareModuleOptions): Promise<Prepare
     await runOrThrow(['sh', '-lc', config.module.build], { cwd: target, inherit: true });
   }
 
-  const patchedBundles = patchTrustBundles(target, config.module.trustBundles ?? [], log);
+  // Resolve the CA only when it is actually needed; most modules declare no trust bundles and must
+  // not pay a docker call (or fail) for a feature they do not use.
+  const bundles = config.module.trustBundles ?? [];
+  const caPath = bundles.length > 0 ? await resolveE2ECa({ config, log }) : undefined;
+  const patchedBundles = patchTrustBundles(target, bundles, log, caPath);
 
   return { sourceDir: target, reused: false, patchedBundles };
 }
@@ -150,14 +226,21 @@ export function patchTrustBundles(
   moduleDir: string,
   bundles: readonly string[],
   log: (message: string) => void = () => undefined,
+  /**
+   * Where to read the E2E CA from. Supplied by {@link resolveE2ECa}, which extracts it from the
+   * platform image when the kit's source tree is not on disk — the normal case in a consumer repo
+   * (DECISIONS.md D-032). Defaults to the source-tree location for the kit's own dev flow.
+   */
+  caPathOverride?: string,
 ): string[] {
   if (bundles.length === 0) return [];
 
-  const caPath = e2eCaPath();
+  const caPath = caPathOverride ?? e2eCaPath();
   if (!existsSync(caPath)) {
     throw new ModuleBuildError(
       `module.trustBundles is set but the E2E CA is missing at ${caPath}. ` +
-        'Run `e2e-kit build-image` (or `node scripts/gen-ca.mjs`) first.',
+        'Run `e2e-kit build-image` (or `node scripts/gen-ca.mjs`) first, or make sure the platform ' +
+        'image is pullable so the CA can be read from it.',
     );
   }
   const ca = readFileSync(caPath, 'utf8');

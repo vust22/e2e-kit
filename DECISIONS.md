@@ -828,9 +828,9 @@ should be read against that record.
 
 ---
 
-## D-032 — OPEN: the E2E CA is unreachable from a consumer repo, so `trustBundles` cannot work there
+## D-032 — The E2E CA is read out of the platform image, not the kit's source tree
 
-**Status: unresolved.** Recorded to preserve the diagnosis; the fix needs a decision.
+**Status: resolved.** The recommended fix below was implemented and verified.
 
 **Spec ref:** §4.1 item 9, §6.4 item 2; DECISIONS.md D-009 (CA generated per image build), D-014 (trust
 bundles patched because the module pins `CURLOPT_CAINFO`).
@@ -879,4 +879,18 @@ on disk.
 material and would go stale against the image); having consumers build images (defeats publishing, and
 the boot budget); committing a fixed CA (D-009 exists precisely to avoid a committed private key).
 
-**Revisit:** immediately — this blocks the Mollie fork PR, which is Phase 2's acceptance gate.
+**Implemented as `resolveE2ECa()`** in `packages/core/src/module/build.ts`. It prefers the kit's source
+tree when present (the kit's own dev flow, unchanged) and otherwise extracts from
+`process.env.E2E_PS_IMAGE ?? platform.imageOverride ?? e2e-ps:<first version>`. `patchTrustBundles`
+takes the resolved path as an argument. The CA is resolved **only when `trustBundles` is non-empty**, so
+a module that does not pin a bundle pays no docker call and cannot fail on this.
+
+`--entrypoint cat` is required — the platform image's entrypoint is its own boot script, so without the
+override `docker run` starts a shop instead of printing a file. `--platform` is pinned for the same
+reason as everywhere else (D-003).
+
+**Verified, beyond the six unit tests:** with the source-tree CA temporarily hidden, extraction from
+`e2e-ps:9` produced a valid 1984-byte PEM that is **byte-identical** (`diff`) to the certificate the
+image was built from — so the module ends up trusting exactly the CA the shop container trusts, which is
+the property D-014 needs. A non-kit image (`alpine:3`) fails with a `ModuleBuildError` naming the image
+and the path.

@@ -1,6 +1,8 @@
 export {
   prepareModule,
   copyModuleTree,
+  resolveE2ECa,
+  IMAGE_CA_PATH,
   patchTrustBundles,
   resolveModuleSourceDir,
   preparedModuleDir,
