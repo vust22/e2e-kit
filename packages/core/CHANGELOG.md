@@ -1,5 +1,12 @@
 # @invertus/e2e-core
 
+## 0.2.2
+
+### Patch Changes
+
+- 2d5ae0e: Resolve the E2E CA from the platform image when the kit's source tree is not present, so
+  `module.trustBundles` works in a consumer repository. See DECISIONS.md D-032.
+
 ## 0.2.1
 
 ### Patch Changes
