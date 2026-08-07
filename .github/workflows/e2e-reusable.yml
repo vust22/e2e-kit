@@ -49,6 +49,8 @@ jobs:
       sandbox: ${{ steps.matrix.outputs.sandbox }}
       sandbox-enabled: ${{ steps.matrix.outputs.sandbox-enabled }}
       module-name: ${{ steps.matrix.outputs.module-name }}
+      consumer-dir: ${{ steps.paths.outputs.consumer-dir }}
+      config-rel: ${{ steps.paths.outputs.config-rel }}
     steps:
       - uses: actions/checkout@v4
 
@@ -76,9 +78,30 @@ jobs:
         if: github.repository == format('{0}/e2e-kit', inputs.kit-owner)
         run: npx tsc --build
 
+      # `e2e-kit test` looks for playwright.config.ts in the CURRENT DIRECTORY. In a real consumer repo
+      # that is the repo root and the default is right; when the consumer is a subdirectory (the
+      # selftest's examples/consumer-module) it is not. Derive the consumer root from config-path so
+      # both cases work off one rule: e2e/e2e.config.ts -> ".", a/b/e2e/e2e.config.ts -> "a/b".
+      - id: paths
+        run: |
+          set -euo pipefail
+          cfg='${{ inputs.config-path }}'
+          dir=$(dirname "$(dirname "$cfg")")
+          if [ "$dir" = "." ] || [ "$dir" = "/" ]; then
+            dir='.'
+            rel="$cfg"
+          else
+            rel="${cfg#"$dir"/}"
+          fi
+          echo "consumer-dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "config-rel=$rel" >> "$GITHUB_OUTPUT"
+          echo "consumer root '$dir', config '$rel'"
+
       - id: matrix
         run: |
           set -euo pipefail
+          # This step runs from the repo root and is inside `prepare` itself, so it uses the input
+          # directly — `needs.prepare` is not addressable from within prepare.
           json=$(npx e2e-kit ci-matrix --config "${{ inputs.config-path }}")
           echo "$json" | python3 -m json.tool
           emit() {
@@ -126,15 +149,17 @@ jobs:
       - run: npx playwright install --with-deps chromium
 
       - name: Build the module
-        run: npx e2e-kit prepare-module --config "${{ inputs.config-path }}"
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
+        run: npx e2e-kit prepare-module --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Boot the stack
         id: boot
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
         run: |
           set -euo pipefail
           start=$SECONDS
           npx e2e-kit up --ps ${{ matrix.ps }} --mode mock --reuse-module \
-            --config "${{ inputs.config-path }}"
+            --config "${{ needs.prepare.outputs.config-rel }}"
           echo "seconds=$((SECONDS - start))" >> "$GITHUB_OUTPUT"
 
       # §8.2 asks for a 90s boot budget with a distinct ENV_BOOT_FAILED annotation. Taken literally
@@ -156,7 +181,8 @@ jobs:
           exit 1
 
       - name: Run the shard
-        run: npx e2e-kit test --shard ${{ matrix.shard }} --config "${{ inputs.config-path }}"
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
+        run: npx e2e-kit test --shard ${{ matrix.shard }} --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Capture container logs on failure
         if: failure()
@@ -169,6 +195,7 @@ jobs:
       # `down` reads the recorded stack state rather than the config, so it takes no --config.
       - name: Tear down
         if: always()
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
         run: npx e2e-kit down || true
 
       - uses: actions/upload-artifact@v4
@@ -245,18 +272,21 @@ jobs:
 
       - name: Build the module
         if: steps.guard.outputs.skip == 'false'
-        run: npx e2e-kit prepare-module --config "${{ inputs.config-path }}"
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
+        run: npx e2e-kit prepare-module --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Boot and run
         if: steps.guard.outputs.skip == 'false'
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
         run: |
           set -euo pipefail
           npx e2e-kit up --ps ${{ matrix.ps }} --mode sandbox --reuse-module \
-            --config "${{ inputs.config-path }}"
-          npx e2e-kit test --config "${{ inputs.config-path }}"
+            --config "${{ needs.prepare.outputs.config-rel }}"
+          npx e2e-kit test --config "${{ needs.prepare.outputs.config-rel }}"
 
       - name: Tear down
         if: always() && steps.guard.outputs.skip == 'false'
+        working-directory: ${{ needs.prepare.outputs.consumer-dir }}
         run: npx e2e-kit down || true
 
       - uses: actions/upload-artifact@v4
